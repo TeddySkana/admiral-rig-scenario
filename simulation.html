@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Skana - Admiral's Rig Protection Senario</title>
+  <link rel="icon" href="assets/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" href="assets/favicon.png" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body class="sim-page">
+  <main class="sim-shell">
+    <nav class="sim-controls panel-glass">
+      <div class="control-row">
+        <button id="playBtn" class="btn btn-primary small"><span class="play-glyph"></span> Play</button>
+        <button id="pauseBtn" class="btn btn-muted small"><span>||</span> Pause</button>
+        <button id="resetBtn" class="btn btn-muted small"><span>C</span> Reset</button>
+        <a class="btn btn-muted small" href="./index.html"><span>&lt;</span> Back to Scenario Selection</a>
+      </div>
+      <div class="speed-row" aria-label="Simulation speed">
+        <span class="speed-label">Simulation Speed</span>
+        <button class="speed-btn active" data-speed="1">x1</button>
+        <button class="speed-btn" data-speed="10">x10</button>
+        <button class="speed-btn" data-speed="60">x60</button>
+        <button class="speed-btn" data-speed="600">x600</button>
+      </div>
+    </nav>
+
+    <section class="sim-layout">
+      <div class="map-wrap panel-glass">
+        <canvas id="simCanvas" width="1320" height="900" aria-label="Offshore rig simulation map"></canvas>
+        <div id="fpsBadge" class="fps-badge"><span>FPS</span><strong>0</strong></div>
+        <div id="orientationOverlay" class="orientation-overlay">
+          <canvas id="miniCanvas" width="220" height="160" aria-label="Orientation map"></canvas>
+        </div>
+      </div>
+
+      <aside class="side-panel panel-glass">
+        <div class="panel-title">Intelegance's mission state</div>
+        <div class="logic-step active" id="logicDetect">1. Radar detects small boats at 12000 yd</div>
+        <div class="logic-step" id="logicChallenge">2. Radio challenge and response decision</div>
+        <div class="logic-step" id="logicIntercept">3. Suspicious boats trigger interception</div>
+        <div class="logic-step" id="logicApproval">4. HQ approval for violent interception</div>
+        <div class="logic-step" id="logicWeapon">5. MAG engagement, 70% hit probability</div>
+        <div class="logic-step" id="logicRecover">6. Return to dynamic patrol ring</div>
+        <div class="scenario-seed" id="scenarioSeed"></div>
+      </aside>
+    </section>
+
+    <section class="status-grid">
+      <div class="status-card"><span>Mission time</span><strong id="missionTime">00:00</strong></div>
+      <div class="status-card"><span>Live threats</span><strong id="liveThreats">0</strong></div>
+      <div class="status-card"><span>Tracking</span><strong id="trackingCount">0</strong></div>
+      <div class="status-card"><span>Hostile</span><strong id="hostileCount">0</strong></div>
+      <div class="status-card"><span>Mission status</span><strong id="missionStatus">Nominal</strong></div>
+    </section>
+
+    <section class="lower-panels">
+      <div class="events panel-glass">
+        <div class="panel-title">Event Log</div>
+        <ol id="eventLog"></ol>
+      </div>
+      <div class="threats panel-glass">
+        <div class="panel-title">Tracked Boats</div>
+        <table>
+          <thead><tr><th>ID</th><th>Status</th><th>Range</th><th>Assigned</th></tr></thead>
+          <tbody id="threatTable"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="approvalModal" class="approval-modal hidden" role="dialog" aria-modal="true" aria-labelledby="approvalTitle">
+    <div id="approvalCard" class="approval-card pending">
+      <div class="approval-copy">
+        <p class="eyebrow">Headquarters authorization</p>
+        <h2 id="approvalTitle">Waiting for violent interception approval</h2>
+        <p id="approvalText">The approval screen is red while HQ is reviewing the interception request.</p>
+      </div>
+      <div class="approval-actions">
+        <button id="confirmApprovalBtn" class="btn btn-primary" disabled>Confirm Interception</button>
+        <button id="cancelApprovalBtn" class="btn btn-muted">Cancel Display</button>
+      </div>
+    </div>
+    <div id="videoFeed" class="video-feed hidden">
+      <div class="video-top"><span>BOW CAMERA</span><span id="videoThreatId">TARGET</span></div>
+      <div class="video-frame">
+        <div class="reticle"></div>
+        <div class="video-target"></div>
+        <div class="scan-line"></div>
+      </div>
+      <div class="video-bottom">MAG SAFE ARC CHECK ACTIVE - DO NOT FIRE IF BOW POINTS TO RIG</div>
+    </div>
+  </div>
+
+  <script src="js/simulator.js"></script>
+</body>
+</html>
