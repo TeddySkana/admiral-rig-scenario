@@ -159,7 +159,7 @@ h1 {
 
 .landing-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 20px;
   align-items: center;
   margin-top: 18px;
@@ -274,50 +274,75 @@ h1 {
 .status-pill { display: inline-flex; align-items: center; gap: 7px; }
 .status-dot { width: 9px; height: 9px; border-radius: 999px; display: inline-block; }
 
-.approval-modal {
-  position: fixed; inset: 0;
-  display: grid;
-  place-items: center;
-  z-index: 50;
-  background: rgba(1, 4, 9, 0.78);
-  backdrop-filter: blur(6px);
-  padding: 22px;
+
+.map-notice {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  max-width: min(90%, 760px);
+  padding: 11px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(126, 227, 255, 0.55);
+  background: rgba(5, 24, 38, 0.88);
+  color: var(--text);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
+  font-weight: 850;
+  text-align: center;
+}
+
+.approval-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(96%, 900px);
+  z-index: 30;
+  pointer-events: auto;
 }
 .hidden { display: none !important; }
 .approval-card {
-  width: min(780px, 94vw);
-  border-radius: 24px;
-  padding: 26px;
+  width: 100%;
+  border-radius: 16px;
+  padding: 14px 16px;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 16px 46px rgba(0, 0, 0, 0.42);
   transition: background 300ms ease, border-color 300ms ease;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
 }
-.approval-card.pending { background: linear-gradient(135deg, rgba(119, 18, 28, 0.94), rgba(50, 8, 16, 0.96)); border-color: rgba(255, 90, 106, 0.68); }
-.approval-card.approved { background: linear-gradient(135deg, rgba(20, 107, 74, 0.94), rgba(8, 48, 42, 0.96)); border-color: rgba(130, 245, 195, 0.68); }
-.approval-copy h2 { margin: 0 0 10px; font-size: clamp(1.7rem, 4vw, 3rem); line-height: 1.02; }
-.approval-copy p:last-child { color: rgba(255, 255, 255, 0.82); }
-.approval-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 22px; }
+.approval-card.pending { background: linear-gradient(135deg, rgba(119, 18, 28, 0.92), rgba(50, 8, 16, 0.92)); border-color: rgba(255, 90, 106, 0.68); }
+.approval-card.approved { background: linear-gradient(135deg, rgba(20, 107, 74, 0.92), rgba(8, 48, 42, 0.92)); border-color: rgba(130, 245, 195, 0.68); }
+.approval-card .eyebrow { margin-bottom: 4px; font-size: 0.68rem; }
+.approval-copy h2 { margin: 0 0 4px; font-size: clamp(1rem, 1.8vw, 1.6rem); line-height: 1.05; }
+.approval-copy p:last-child { color: rgba(255, 255, 255, 0.82); margin: 0; font-size: 0.84rem; }
+.approval-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .video-feed {
-  width: min(780px, 94vw);
-  margin-top: 16px;
-  border-radius: 18px;
+  width: 100%;
+  margin-top: 14px;
+  border-radius: 16px;
   overflow: hidden;
   border: 1px solid rgba(116, 220, 255, 0.35);
   background: #05131b;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.48);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.34);
 }
-.video-top, .video-bottom { display: flex; justify-content: space-between; padding: 10px 14px; color: var(--green); font-weight: 900; letter-spacing: 0.08em; font-size: 0.78rem; background: rgba(6, 21, 29, 0.95); }
-.video-frame { height: 240px; position: relative; overflow: hidden; background: repeating-linear-gradient(0deg, #0b2f3d 0, #0b2f3d 2px, #092533 3px, #092533 6px); }
+.video-top, .video-bottom { display: flex; justify-content: space-between; gap: 8px; padding: 9px 11px; color: var(--green); font-weight: 900; letter-spacing: 0.06em; font-size: 0.68rem; background: rgba(6, 21, 29, 0.95); }
+.video-frame { height: 160px; position: relative; overflow: hidden; background: repeating-linear-gradient(0deg, #0b2f3d 0, #0b2f3d 2px, #092533 3px, #092533 6px); }
 .video-frame:before { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 52% 48%, rgba(130, 245, 195, 0.14), transparent 18%), linear-gradient(90deg, rgba(255,255,255,0.04), transparent 30%, rgba(255,255,255,0.04)); }
-.reticle { position: absolute; inset: 50% auto auto 50%; width: 108px; height: 108px; border: 2px solid rgba(130, 245, 195, 0.84); border-radius: 50%; transform: translate(-50%, -50%); }
+.reticle { position: absolute; inset: 50% auto auto 50%; width: 86px; height: 86px; border: 2px solid rgba(130, 245, 195, 0.84); border-radius: 50%; transform: translate(-50%, -50%); }
 .reticle:before, .reticle:after { content: ""; position: absolute; background: rgba(130, 245, 195, 0.84); }
-.reticle:before { left: 50%; top: -34px; width: 2px; height: 176px; }
-.reticle:after { top: 50%; left: -34px; height: 2px; width: 176px; }
-.video-target { position: absolute; left: 53%; top: 48%; width: 52px; height: 14px; background: var(--orange); clip-path: polygon(100% 50%, 0 0, 18% 50%, 0 100%); transform: translate(-50%, -50%) rotate(-12deg); filter: drop-shadow(0 0 10px rgba(255, 156, 61, 0.8)); }
+.reticle:before { left: 50%; top: -28px; width: 2px; height: 142px; }
+.reticle:after { top: 50%; left: -28px; height: 2px; width: 142px; }
+.video-target { position: absolute; left: 53%; top: 48%; width: 38px; height: 11px; background: var(--orange); clip-path: polygon(100% 50%, 0 0, 18% 50%, 0 100%); transform: translate(-50%, -50%) rotate(-12deg); filter: drop-shadow(0 0 10px rgba(255, 156, 61, 0.8)); }
 .scan-line { position: absolute; left: 0; right: 0; height: 4px; background: rgba(130, 245, 195, 0.24); animation: scan 1.8s linear infinite; }
 @keyframes scan { from { top: 0; } to { top: 100%; } }
 
 @media (max-width: 1100px) {
+  .approval-card { grid-template-columns: 1fr; }
+  .approval-actions { justify-content: flex-start; }
   .cards-grid, .landing-grid, .sim-layout, .lower-panels { grid-template-columns: 1fr; }
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .launch-btn { min-width: unset; font-size: 1.1rem; }

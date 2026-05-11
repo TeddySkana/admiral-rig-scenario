@@ -28,6 +28,7 @@
     cancelApproval: document.getElementById('cancelApprovalBtn'),
     video: document.getElementById('videoFeed'),
     videoThreatId: document.getElementById('videoThreatId'),
+    mapNotice: document.getElementById('mapNotice'),
     logic: {
       detect: document.getElementById('logicDetect'),
       challenge: document.getElementById('logicChallenge'),
@@ -62,7 +63,7 @@
 
   const CONFIG = {
     missionDurationSec: 11 * 3600,
-    radarRangeYd: 12000,
+    radarRangeYd: 20000,
     staticRingYd: 500,
     patrolRingYd: 3000,
     protectedPolyYd: 5000,
@@ -190,7 +191,10 @@
       this.events = [];
       this.outcome = 'Nominal';
       if (this.approvalTimer) clearTimeout(this.approvalTimer);
+      if (this.mapNoticeTimer) clearTimeout(this.mapNoticeTimer);
       this.approvalTimer = null;
+      this.mapNoticeTimer = null;
+      if (UI.mapNotice) UI.mapNotice.classList.add('hidden');
       this.pendingApprovalThreatId = null;
       this.approvalPauseActive = false;
       this.modalOpen = false;
@@ -206,7 +210,7 @@
       this.initNeutralTraffic();
       this.log('00:00', 'Mission loaded. Dynamic patrol, static guard, reserve boat, and neutral traffic are initialized.');
       this.log('00:00', this.describeSchedule());
-      this.hideApproval();
+      this.hideApproval(true);
       this.updateSeedPanel();
       this.updateUI();
     }
@@ -268,6 +272,7 @@
         b.spawnRadiusYd = CONFIG.enemySpawnRadiusYd;
         b.enteredMapLogged = false;
         b.evasiveSeed = Math.random() < CONFIG.hostileZigzagChance;
+        b.evasiveZigzagAngleDeg = rand(30, 60);
         b.complianceTurn = choice([-1, 1]);
         b.assignedBoats = [];
         b.bs402SupportLogged = false;
@@ -283,30 +288,39 @@
       let end;
       let pathClearanceYd = 0;
 
-      // Civilian traffic is sampled on a straight transit line from outside one
-      // map edge to outside the opposite edge. The offset is forced outside the
-      // 12000 yd radar ring, so the dashed path is visible inside the map but
-      // never intersects the ring.
-      for (let attempt = 0; attempt < 80; attempt += 1) {
-        const horizontal = Math.random() < 0.5;
-        const margin = rand(1700, 3200);
-        const minOffset = CONFIG.radarRangeYd + rand(900, 1700);
-        if (horizontal) {
-          const maxOffset = halfY - 900;
-          const baseY = choice([-1, 1]) * rand(minOffset, maxOffset);
-          const slope = rand(-0.09, 0.09);
-          start = { x: -halfX - margin, y: baseY - slope * halfX };
-          end = { x: halfX + margin, y: baseY + slope * halfX };
+      // Civilian traffic is sampled as a short corner transit from outside one
+      // map edge to outside an adjacent edge. This keeps the dashed white path
+      // visible inside the map while avoiding the large radar ring.
+      let foundSafePath = false;
+      for (let attempt = 0; attempt < 250; attempt += 1) {
+        const sx = choice([-1, 1]);
+        const sy = choice([-1, 1]);
+        const marginA = rand(1200, 3000);
+        const marginB = rand(1200, 3000);
+        const xNearCorner = sx * rand(Math.max(0, halfX - 900), halfX + 1400);
+        const yNearCorner = sy * rand(Math.max(0, halfY - 900), halfY + 1400);
+        if (Math.random() < 0.5) {
+          start = { x: xNearCorner, y: sy * (halfY + marginA) };
+          end = { x: sx * (halfX + marginB), y: yNearCorner };
         } else {
-          const maxOffset = halfX - 900;
-          const baseX = choice([-1, 1]) * rand(minOffset, maxOffset);
-          const slope = rand(-0.09, 0.09);
-          start = { x: baseX - slope * halfY, y: -halfY - margin };
-          end = { x: baseX + slope * halfY, y: halfY + margin };
+          start = { x: sx * (halfX + marginA), y: yNearCorner };
+          end = { x: xNearCorner, y: sy * (halfY + marginB) };
         }
         if (Math.random() < 0.5) [start, end] = [end, start];
         pathClearanceYd = this.distancePointToSegment(this.rig, start, end);
-        if (pathClearanceYd > CONFIG.radarRangeYd + 500) break;
+        if (pathClearanceYd > CONFIG.radarRangeYd + 150) {
+          foundSafePath = true;
+          break;
+        }
+      }
+
+      if (!foundSafePath) {
+        const sx = choice([-1, 1]);
+        const sy = choice([-1, 1]);
+        start = { x: sx * (halfX - 90), y: sy * (halfY + 2600) };
+        end = { x: sx * (halfX + 2600), y: sy * (halfY - 90) };
+        if (Math.random() < 0.5) [start, end] = [end, start];
+        pathClearanceYd = this.distancePointToSegment(this.rig, start, end);
       }
 
       const civilian = new Boat('CV-01', 'neutral', start.x, start.y, angleTo(start, end), {
@@ -322,7 +336,7 @@
       civilian.pathEnd = end;
       civilian.pathClearanceYd = pathClearanceYd;
       this.neutrals.push(civilian);
-      this.log('00:00', `${civilian.id} neutral civilian transit is present on a dashed white path outside the 12000 yd radar ring.`);
+      this.log('00:00', `${civilian.id} neutral civilian transit is present on a dashed white path outside the ${CONFIG.radarRangeYd.toLocaleString()} yd radar ring.`);
     }
 
     distancePointToSegment(point, a, b) {
@@ -502,7 +516,7 @@
         if (dist(n.pos(), n.pathEnd) < 220 || this.isOutsideMapPoint(n.pos(), 3200)) {
           n.status = 'left-area';
           n.visible = false;
-          this.logTime(`${n.id} completed neutral transit. Its dashed path stayed outside the 12000 yd radar ring.`);
+          this.logTime(`${n.id} completed neutral transit. Its dashed path stayed outside the 20000 yd radar ring.`);
         }
       }
     }
@@ -524,7 +538,7 @@
           t.status = 'unknown';
           this.setLogic('detect');
           this.setSpeedMultiplier(10);
-          this.logTime(`${t.id} discovered by rig radar at ${Math.round(rangeRig)} yd and appears on the map. Simulation speed increased to x10 before the radio-response decision.`);
+          this.logTime(`${t.id} discovered by rig radar at ${Math.round(rangeRig)} yd. Detection message appears before interception begins, and simulation speed increased to x10 before the radio-response decision.`);
           this.challengeThreat(t);
         }
 
@@ -548,7 +562,7 @@
           if (dist(t.pos(), this.rig) <= CONFIG.protectedPolyYd && t.status !== 'hostile') {
             t.status = 'hostile';
             this.setLogic('intercept', 'danger');
-            this.logTime(`${t.id} penetrated the 5000 yd protected polygon and is now hostile.`);
+            this.logTime(`${t.id} penetrated the 5000 yd and is now hostile.`);
           }
         }
 
@@ -573,6 +587,7 @@
         t.speedKt = CONFIG.enemyAttackKt;
         this.setLogic('intercept', 'warning');
         this.logTime(`${t.id} did not respond. Status changed from green to orange and interception begins.`);
+        this.showMapNotice(`${t.id} failed the radio challenge. Interception is starting.`, 5000);
         this.assignInterceptor(t);
       }
     }
@@ -617,8 +632,9 @@
       let speed = CONFIG.enemyAttackKt;
       if (t.evasiveZigzag) {
         t.zigzagClock += dt;
-        const wave = Math.sign(Math.sin(t.zigzagClock / 10));
-        desired += wave * 30 * DEG;
+        const wave = Math.sign(Math.sin(t.zigzagClock / 10)) || 1;
+        const zigzagAngle = clamp(t.evasiveZigzagAngleDeg || 45, 30, 60);
+        desired += wave * zigzagAngle * DEG;
         speed = CONFIG.hostileZigzagSpeedKt;
       }
       t.move(dt, desired, speed);
@@ -693,7 +709,7 @@
       if (insideProtected) {
         if (!insideProtected.massInterceptLogged) {
           insideProtected.massInterceptLogged = true;
-          this.logTime(`${insideProtected.id} is inside the 5000 yd protected polygon. All available blue vessels drive directly toward the threat.`);
+          this.logTime(`${insideProtected.id} is inside the 5000 yd. All available blue vessels drive directly toward the threat.`);
         }
         for (const boat of this.blue) {
           if (boat.id === 'BS 403' && !this.reserveLaunched) {
@@ -777,6 +793,7 @@
           b.disabled = true;
           b.status = 'disabled';
           this.logTime(`${target.id} neutralized by physical collision. ${b.id} is lost.`);
+          if (!this.hasActiveSuspiciousThreat()) UI.video.classList.add('hidden');
           this.releaseInterceptor(b, 'lost');
           continue;
         }
@@ -796,7 +813,7 @@
       this.pendingApprovalThreatId = target.id;
       this.approvalPauseActive = true;
       this.setLogic('approval', 'danger');
-      this.logTime(`${interceptor.id} reached 1000 yd from ${target.id}. Violent interception approval requested [Simulation paused for HQ response].`);
+      this.logTime(`${interceptor.id} reached 1000 yd from ${target.id}. Violent interception approval requested. Simulation paused for HQ response.`);
       this.showApproval(target);
       this.running = false;
       this.approvalTimer = setTimeout(() => {
@@ -804,35 +821,51 @@
           UI.approvalCard.classList.remove('pending');
           UI.approvalCard.classList.add('approved');
           UI.approvalTitle.textContent = 'HQ approved violent interception';
-          UI.approvalText.textContent = 'Confirm interception to continue.';
+          UI.approvalText.textContent = 'The approval screen is green. Confirm interception or cancel the display to continue the simulation at x1.';
           UI.confirmApproval.disabled = false;
-          UI.video.classList.remove('hidden');
-          UI.videoThreatId.textContent = target.id;
+          this.showVideoFor(target);
         }
       }, 5000);
     }
 
     showApproval(target) {
       this.modalOpen = true;
+      if (UI.mapNotice) UI.mapNotice.classList.add('hidden');
       UI.modal.classList.remove('hidden');
       UI.video.classList.add('hidden');
       UI.approvalCard.classList.add('pending');
       UI.approvalCard.classList.remove('approved');
       UI.approvalTitle.textContent = `Waiting for violent interception approval for ${target.id}`;
-      UI.approvalText.textContent = 'HQ review in progress...';
+      UI.approvalText.textContent = 'HQ review in progress. The simulation is paused; the screen will turn green after five seconds or continue when you cancel the display.';
       UI.confirmApproval.disabled = true;
       UI.videoThreatId.textContent = target.id;
     }
 
-    hideApproval() {
+    hideApproval(hideVideo = false) {
       if (this.approvalTimer) clearTimeout(this.approvalTimer);
       this.approvalTimer = null;
       this.modalOpen = false;
       this.approvalPauseActive = false;
       UI.modal.classList.add('hidden');
-      UI.video.classList.add('hidden');
+      if (hideVideo) UI.video.classList.add('hidden');
       UI.confirmApproval.disabled = true;
       this.pendingApprovalThreatId = null;
+    }
+
+    showVideoFor(target) {
+      if (!target) return;
+      UI.video.classList.remove('hidden');
+      UI.videoThreatId.textContent = target.id;
+    }
+
+    showMapNotice(message, durationMs = 5000) {
+      if (!UI.mapNotice) return;
+      UI.mapNotice.textContent = message;
+      UI.mapNotice.classList.remove('hidden');
+      if (this.mapNoticeTimer) clearTimeout(this.mapNoticeTimer);
+      this.mapNoticeTimer = setTimeout(() => {
+        UI.mapNotice.classList.add('hidden');
+      }, durationMs);
     }
 
     confirmApproval() {
@@ -842,12 +875,13 @@
         target.status = 'engaging';
         if (target.evasiveSeed) {
           target.evasiveZigzag = true;
-          this.logTime(`${target.id} begins evasive zigzag at 20 kt after weapon engagement starts.`);
+          this.logTime(`${target.id} begins evasive zigzag at 20 kt, angled ${Math.round(target.evasiveZigzagAngleDeg || 45)} degrees off-axis after weapon engagement starts.`);
         }
         this.setLogic('weapon', 'danger');
         this.logTime(`HQ approval confirmed for ${target.id}. MAG engagement authorized at 70% hit probability.`);
       }
-      this.hideApproval();
+      this.hideApproval(false);
+      this.showVideoFor(target);
       this.setSpeedMultiplier(1);
       this.running = true;
     }
@@ -859,14 +893,15 @@
         target.status = 'engaging';
         if (target.evasiveSeed) {
           target.evasiveZigzag = true;
-          this.logTime(`${target.id} begins evasive zigzag at 20 kt after weapon engagement starts.`);
+          this.logTime(`${target.id} begins evasive zigzag at 20 kt, angled ${Math.round(target.evasiveZigzagAngleDeg || 45)} degrees off-axis after weapon engagement starts.`);
         }
         this.setLogic('weapon', 'danger');
         this.logTime('Approval display cancelled by the user. HQ approval is treated as received and the simulation continues at x1.');
       } else {
         this.logTime('Approval display closed.');
       }
-      this.hideApproval();
+      this.hideApproval(false);
+      this.showVideoFor(target);
       this.setSpeedMultiplier(1);
       this.running = true;
     }
@@ -892,6 +927,7 @@
         target.status = 'neutralized';
         target.disabled = true;
         this.logTime(`${b.id} MAG burst hit ${target.id}. Target neutralized.`);
+        if (!this.hasActiveSuspiciousThreat()) UI.video.classList.add('hidden');
         this.releaseInterceptor(b, 'return');
         if (this.hasActiveSuspiciousThreat()) this.setLogic('intercept', 'danger', false);
         else this.setLogic('recover');
@@ -960,7 +996,7 @@
           }
           if (dist(t.pos(), this.rig) <= CONFIG.protectedPolyYd && !t.penetrationLogged) {
             t.penetrationLogged = true;
-            this.logTime(`${t.id} entered the 5000 yd protected polygon. Mission continues; failure is only inside the 500 yd ring.`);
+            this.logTime(`${t.id} entered the 5000 yd. Mission continues; failure is only inside the 500 yd ring.`);
           }
         }
       }
@@ -997,7 +1033,7 @@
     updateSeedPanel() {
       const lines = this.threats.map(t => `${t.id}: spawn 15000 yd at ${formatTime(t.activationTime)}, radio ${t.responds ? 'responds (30% path)' : 'no response (70% path)'}`);
       const neutral = this.neutrals[0];
-      const neutralLine = neutral ? `<br>CV-01 neutral path clearance: ${Math.round(neutral.pathClearanceYd).toLocaleString()} yd from rig (>12000 yd ring)` : '';
+      const neutralLine = neutral ? `<br>CV-01 neutral path clearance: ${Math.round(neutral.pathClearanceYd).toLocaleString()} yd from rig (outside ${CONFIG.radarRangeYd.toLocaleString()} yd ring)` : '';
       UI.scenarioSeed.innerHTML = `<strong>Load decisions</strong><br>${this.attackMode === 'coordinated' ? '50% branch: coordinated attack' : '50% branch: separated attack'}<br>${lines.join('<br>')}<br>MAG hit probability in code: 70%${neutralLine}`;
     }
 
@@ -1066,7 +1102,6 @@
       this.drawThreats(rect);
       this.drawNeutralTraffic();
       this.drawBlue(rect);
-      this.drawVectors(rect);
       this.drawScale(rect);
       this.drawLegend(rect);
       this.drawMiniMap();
@@ -1130,11 +1165,11 @@
 
     drawRangeElements() {
       const center = this.worldToScreen(this.rig);
-      this.drawCircle(CONFIG.radarRangeYd, 'rgba(90, 188, 222, 0.28)', '12000 yd radar / 6.8 mi', 22 * DEG);
-      this.drawCircle(CONFIG.protectedPolyYd, 'rgba(255, 156, 61, 0.48)', '5000 yd protected polygon', 140 * DEG);
-      this.drawCircle(CONFIG.patrolRingYd, 'rgba(232, 244, 255, 0.75)', '3000 yd dynamic patrol', -98 * DEG, 2);
-      this.drawCircle(CONFIG.staticRingYd, 'rgba(130, 245, 195, 0.9)', '500 yd safety ring', 58 * DEG, 2);
-      this.drawProtectedPolygon(center);
+      this.drawCircle(CONFIG.radarRangeYd, 'rgba(90, 188, 222, 0.28)', '20000 yd', 45 * DEG);
+      this.drawCircle(CONFIG.protectedPolyYd, 'rgba(255, 156, 61, 0.48)', '5000 yd', 140 * DEG);
+      this.drawCircle(CONFIG.patrolRingYd, 'rgba(232, 244, 255, 0.75)', '3000 yd', -98 * DEG, 2);
+      this.drawCircle(CONFIG.staticRingYd, 'rgba(130, 245, 195, 0.9)', '500 yd', 58 * DEG, 2);
+      // Protected polygon outline removed to reduce map clutter; the 5000 yd radius label remains.
     }
 
     drawCircle(radiusYd, stroke, label, labelAngle, lineWidth = 1) {
@@ -1182,15 +1217,15 @@
       ctx.strokeStyle = 'rgba(234, 243, 255, 0.55)';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(0, 0, 12, 0, TWO_PI);
+      ctx.arc(0, 0, 9, 0, TWO_PI);
       ctx.fill(); ctx.stroke();
       ctx.strokeStyle = '#ff9c3d';
       ctx.beginPath();
-      ctx.moveTo(-15, -12); ctx.lineTo(15, 12); ctx.moveTo(15, -12); ctx.lineTo(-15, 12); ctx.stroke();
+      ctx.moveTo(-11, -9); ctx.lineTo(11, 9); ctx.moveTo(11, -9); ctx.lineTo(-11, 9); ctx.stroke();
       ctx.fillStyle = COLORS.white;
-      ctx.font = '800 13px Inter, system-ui, sans-serif';
+      ctx.font = '800 10px Inter, system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('RIG', 0, -22);
+      ctx.fillText('RIG', 0, -16);
       ctx.restore();
     }
 
@@ -1238,8 +1273,8 @@
 
     drawBoatTriangle(boat, color) {
       const p = this.worldToScreen(boat.pos());
-      const bodyLength = boat.type === 'blue' ? 24 : boat.type === 'neutral' ? 23 : 21;
-      const bodyWidth = boat.type === 'blue' ? 10 : 9;
+      const bodyLength = boat.type === 'blue' ? 16 : boat.type === 'neutral' ? 15 : 14;
+      const bodyWidth = boat.type === 'blue' ? 7 : 6;
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.rotate(boat.heading);
@@ -1256,7 +1291,7 @@
 
       // Internal three-dot vessel model: bow, port stern, starboard stern.
       ctx.fillStyle = 'rgba(255,255,255,0.68)';
-      const dotRadius = 1.9;
+      const dotRadius = 1.25;
       const dots = [
         { x: bodyLength * 0.45, y: 0 },
         { x: -bodyLength * 0.32, y: -bodyWidth * 0.24 },
@@ -1274,9 +1309,9 @@
       const p = this.worldToScreen(boat.pos());
       ctx.save();
       ctx.fillStyle = color;
-      ctx.font = '800 12px Inter, system-ui, sans-serif';
+      ctx.font = '800 10px Inter, system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(boat.id, p.x, p.y + 24);
+      ctx.fillText(boat.id, p.x, p.y + 18);
       ctx.restore();
     }
 
@@ -1380,9 +1415,11 @@
       mctx.fillStyle = 'rgba(234, 243, 255, 0.9)';
       mctx.font = '800 11px Inter, system-ui, sans-serif';
       mctx.textAlign = 'center';
-      mctx.fillText('N', center.x, 16);
+      const northX = rect.width - 20;
+      const northY = 16;
+      mctx.fillText('N', northX, northY);
       mctx.beginPath();
-      mctx.moveTo(center.x, 24); mctx.lineTo(center.x - 5, 36); mctx.lineTo(center.x + 5, 36); mctx.closePath(); mctx.fill();
+      mctx.moveTo(northX, northY + 8); mctx.lineTo(northX - 5, northY + 20); mctx.lineTo(northX + 5, northY + 20); mctx.closePath(); mctx.fill();
     }
 
     drawMiniBoat(boat, center, scale, color) {

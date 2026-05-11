@@ -33,17 +33,41 @@
         <div id="orientationOverlay" class="orientation-overlay">
           <canvas id="miniCanvas" width="220" height="160" aria-label="Orientation map"></canvas>
         </div>
+
+        <div id="mapNotice" class="map-notice hidden"></div>
+        <div id="approvalModal" class="approval-banner hidden" role="dialog" aria-modal="false" aria-labelledby="approvalTitle">
+          <div id="approvalCard" class="approval-card pending">
+            <div class="approval-copy">
+              <p class="eyebrow">Headquarters authorization</p>
+              <h2 id="approvalTitle">Waiting for violent interception approval</h2>
+              <p id="approvalText">The approval screen is red while HQ is reviewing the interception request.</p>
+            </div>
+            <div class="approval-actions">
+              <button id="confirmApprovalBtn" class="btn btn-primary" disabled>Confirm Interception</button>
+              <button id="cancelApprovalBtn" class="btn btn-muted">Cancel Display</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <aside class="side-panel panel-glass">
         <div class="panel-title">Intelegance's mission state</div>
-        <div class="logic-step active" id="logicDetect">1. Radar detects small boats at 12000 yd</div>
+        <div class="logic-step active" id="logicDetect">1. Radar detects small boats at 20000 yd</div>
         <div class="logic-step" id="logicChallenge">2. Radio challenge and response decision</div>
         <div class="logic-step" id="logicIntercept">3. Suspicious boats trigger interception</div>
         <div class="logic-step" id="logicApproval">4. HQ approval for violent interception</div>
         <div class="logic-step" id="logicWeapon">5. MAG engagement, 70% hit probability</div>
         <div class="logic-step" id="logicRecover">6. Return to dynamic patrol ring</div>
         <div class="scenario-seed" id="scenarioSeed"></div>
+        <div id="videoFeed" class="video-feed hidden">
+          <div class="video-top"><span>BOW CAMERA</span><span id="videoThreatId">TARGET</span></div>
+          <div class="video-frame">
+            <div class="reticle"></div>
+            <div class="video-target"></div>
+            <div class="scan-line"></div>
+          </div>
+          <div class="video-bottom">MAG SAFE ARC CHECK ACTIVE - DO NOT FIRE IF BOW POINTS TO RIG</div>
+        </div>
       </aside>
     </section>
 
@@ -69,29 +93,6 @@
       </div>
     </section>
   </main>
-
-  <div id="approvalModal" class="approval-modal hidden" role="dialog" aria-modal="true" aria-labelledby="approvalTitle">
-    <div id="approvalCard" class="approval-card pending">
-      <div class="approval-copy">
-        <p class="eyebrow">Headquarters authorization</p>
-        <h2 id="approvalTitle">Waiting for violent interception approval</h2>
-        <p id="approvalText">The approval screen is red while HQ is reviewing the interception request.</p>
-      </div>
-      <div class="approval-actions">
-        <button id="confirmApprovalBtn" class="btn btn-primary" disabled>Confirm Interception</button>
-        <button id="cancelApprovalBtn" class="btn btn-muted">Cancel Display</button>
-      </div>
-    </div>
-    <div id="videoFeed" class="video-feed hidden">
-      <div class="video-top"><span>BOW CAMERA</span><span id="videoThreatId">TARGET</span></div>
-      <div class="video-frame">
-        <div class="reticle"></div>
-        <div class="video-target"></div>
-        <div class="scan-line"></div>
-      </div>
-      <div class="video-bottom">MAG SAFE ARC CHECK ACTIVE - DO NOT FIRE IF BOW POINTS TO RIG</div>
-    </div>
-  </div>
 
   <script src="js/simulator.js"></script>
 </body>

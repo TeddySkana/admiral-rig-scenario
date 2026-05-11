@@ -19,7 +19,7 @@ Then open `http://localhost:8000`.
 
 ## Implemented scenario rules
 
-- Rig radar discovers new boats only when they are inside 12000 yd.
+- Rig radar discovers new boats only when they are inside 20000 yd.
 - Boats are hidden until discovered.
 - On discovery, each boat is challenged by radio.
 - 30% of boats respond and remain green/compliant, avoid the 5000 yd protected polygon, and continue away.
@@ -68,7 +68,7 @@ Then open `http://localhost:8000` and launch the scenario from the first page.
 - Removed animated wave motion from the map background.
 - The simulation now automatically switches to x10 when the interception state activates.
 - Removed the orientation-map title while keeping the minimap overlay.
-- Neutral civilian traffic is generated on a dashed white line from outside the map to outside the map while staying outside the 12000 yd ring.
+- Neutral civilian traffic is generated on a dashed white line from outside the map to outside the map while staying outside the 20000 yd ring.
 
 ## v4 fixes
 
@@ -91,4 +91,3 @@ Then open `http://localhost:8000` and launch the scenario from the first page.
 - Coordinated attacks now use the same activation time and equal spawn radius, so both boats arrive together from different angles.
 - HQ approval remains paused for operator input; the red approval state lasts five seconds before turning green, and either button resumes at x1.
 - BS 401 returns to the nearest point on the 3000 yd patrol ring before resuming circular patrol instead of snapping back to the circle. BS 402 similarly returns to the nearest point on the 500 yd static ring after support interception.
-"# admiral-rig-scenario" 
