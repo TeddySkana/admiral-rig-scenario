@@ -796,7 +796,7 @@
       this.pendingApprovalThreatId = target.id;
       this.approvalPauseActive = true;
       this.setLogic('approval', 'danger');
-      this.logTime(`${interceptor.id} reached 1000 yd from ${target.id}. Violent interception approval requested. Simulation paused for HQ response.`);
+      this.logTime(`${interceptor.id} reached 1000 yd from ${target.id}. Violent interception approval requested [Simulation paused for HQ response].`);
       this.showApproval(target);
       this.running = false;
       this.approvalTimer = setTimeout(() => {
@@ -804,7 +804,7 @@
           UI.approvalCard.classList.remove('pending');
           UI.approvalCard.classList.add('approved');
           UI.approvalTitle.textContent = 'HQ approved violent interception';
-          UI.approvalText.textContent = 'The approval screen is green. Confirm interception or cancel the display to continue the simulation at x1.';
+          UI.approvalText.textContent = 'Confirm interception to continue.';
           UI.confirmApproval.disabled = false;
           UI.video.classList.remove('hidden');
           UI.videoThreatId.textContent = target.id;
@@ -819,7 +819,7 @@
       UI.approvalCard.classList.add('pending');
       UI.approvalCard.classList.remove('approved');
       UI.approvalTitle.textContent = `Waiting for violent interception approval for ${target.id}`;
-      UI.approvalText.textContent = 'HQ review in progress. The simulation is paused; the screen will turn green after five seconds or continue when you cancel the display.';
+      UI.approvalText.textContent = 'HQ review in progress...';
       UI.confirmApproval.disabled = true;
       UI.videoThreatId.textContent = target.id;
     }
