@@ -721,92 +721,148 @@
       }
     }
 
-    updateInterceptors(dt) {
-      for (const b of this.blue) {
-        if (!b.targetId || b.disabled) continue;
-        const target = this.threats.find(t => t.id === b.targetId);
-        if (!target || target.status === 'neutralized' || target.status === 'left-area') {
-          this.releaseInterceptor(b, 'return');
-          continue;
-        }
+   updateInterceptors(dt) {
+  for (const b of this.blue) {
+    if (!b.targetId || b.disabled) continue;
 
-        const range = dist(b.pos(), target.pos());
-        const targetRigRange = dist(target.pos(), this.rig);
-        let desired = angleTo(b.pos(), target.pos());
-        let speed = CONFIG.interceptSpeedKt;
-
-        if (range <= 1000) {
-          speed = CONFIG.warningSpeedKt;
-          if (target.approval !== 'approved') {
-            b.status = 'await-approval';
-            this.requestApproval(target, b);
-          } else {
-            b.status = 'engage-mag';
-            this.engageMag(b, target, range);
-          }
-        } else if (targetRigRange <= CONFIG.protectedPolyYd) {
-          // Once the threat is inside the protected polygon, every assigned blue
-          // vessel points its bow directly at the threat and closes distance.
-          b.status = 'direct-intercept';
-          desired = angleTo(b.pos(), target.pos());
-          speed = CONFIG.interceptSpeedKt;
-        } else if (b.id === 'BS 401') {
-          // BS 401 uses a cut-off geometry first: reach the nearest blocking
-          // point on the threat-to-rig line, then close toward the threat.
-          const blockPoint = this.blockingPointFor(b, target);
-          if (dist(b.pos(), blockPoint) > 380 && b.interceptPhase !== 'closing') {
-            b.status = 'cutoff-point';
-            desired = angleTo(b.pos(), blockPoint);
-            speed = CONFIG.interceptSpeedKt;
-          } else {
-            b.interceptPhase = 'closing';
-            b.status = 'intercept-approach';
-            desired = angleTo(b.pos(), target.pos());
-            speed = CONFIG.interceptSpeedKt;
-          }
-        } else if (range > CONFIG.protectedPolyYd) {
-          b.status = 'intercept-approach';
-          speed = CONFIG.interceptSpeedKt;
-        } else if (range > CONFIG.magRangeYd) {
-          b.status = 'zigzag-warning';
-          b.zigzagClock += dt;
-          const wave = Math.sign(Math.sin(b.zigzagClock / 12)) || 1;
-          const targetSpeedFactor = clamp(target.speedKt / CONFIG.enemyAttackKt, 0, 1);
-          const angle = (30 + 30 * targetSpeedFactor) * DEG;
-          desired += wave * angle;
-          speed = CONFIG.zigzagSpeedKt;
-        } else {
-          b.status = 'warning-fire';
-          speed = CONFIG.warningSpeedKt;
-          if (!target.warningLogged) {
-            target.warningLogged = true;
-            this.logTime(`${b.id} reached 2000 yd from ${target.id}. Zigzag stops. Warning flares alternate left and right.`);
-          }
-        }
-
-        if (b.status === 'engage-mag' && b.magMissed && range <= 200) {
-          b.status = 'ram';
-          speed = CONFIG.maxSpeedKt;
-          this.logTime(`${b.id} is within 200 yd of ${target.id}. MAG failed, switching to collision intercept.`);
-          target.status = 'neutralized';
-          target.disabled = true;
-          b.disabled = true;
-          b.status = 'disabled';
-          this.logTime(`${target.id} neutralized by physical collision. ${b.id} is lost.`);
-          if (!this.hasActiveSuspiciousThreat()) UI.video.classList.add('hidden');
-          this.releaseInterceptor(b, 'lost');
-          continue;
-        }
-
-        if (b.status === 'engage-mag' && !this.safeToFire(b)) {
-          const around = angleTo(this.rig, target.pos()) + 90 * DEG;
-          const flank = { x: target.x + Math.cos(around) * 600, y: target.y + Math.sin(around) * 600 };
-          desired = angleTo(b.pos(), flank);
-          speed = 24;
-        }
-        b.move(dt, desired, speed);
-      }
+    const target = this.threats.find(t => t.id === b.targetId);
+    if (!target || target.status === 'neutralized' || target.status === 'left-area') {
+      this.releaseInterceptor(b, 'return');
+      continue;
     }
+
+    const range = dist(b.pos(), target.pos());
+    const targetRigRange = dist(target.pos(), this.rig);
+    let desired = angleTo(b.pos(), target.pos());
+    let speed = CONFIG.interceptSpeedKt;
+
+    if (range <= 1000) {
+      speed = CONFIG.warningSpeedKt;
+
+      if (target.approval !== 'approved') {
+        b.status = 'await-approval';
+        this.requestApproval(target, b);
+      } else {
+        b.status = 'engage-mag';
+        this.engageMag(b, target, range);
+      }
+
+    } else if (range > CONFIG.magRangeYd && range <= CONFIG.protectedPolyYd) {
+      /*
+        REQUIRED INTERCEPTION ZIG-ZAG PHASE
+
+        This branch is intentionally placed before:
+        - the BS 401 blocking-point logic
+        - the "inside protected polygon, direct intercept" override
+
+        That guarantees every assigned blue vessel, including BS 401,
+        performs the documented zig-zag when it is 5000-2000 yd from
+        the target.
+      */
+      b.status = 'zigzag-warning';
+      b.interceptPhase = 'zigzag';
+
+      if (!target.zigzagStartedLogged) {
+        target.zigzagStartedLogged = true;
+        this.logTime(
+          `${b.id} reached ${Math.round(range).toLocaleString()} yd from ${target.id}. Starting mandatory 20 kt zig-zag toward target.`
+        );
+      }
+
+      b.zigzagClock += dt;
+
+      const wave = Math.sign(Math.sin(b.zigzagClock / 12)) || 1;
+      const targetSpeedFactor = clamp(target.speedKt / CONFIG.enemyAttackKt, 0, 1);
+
+      // 30-60 degrees, depending on target speed.
+      const zigzagAngle = (30 + 30 * targetSpeedFactor) * DEG;
+
+      desired = angleTo(b.pos(), target.pos()) + wave * zigzagAngle;
+      speed = CONFIG.zigzagSpeedKt;
+
+    } else if (range <= CONFIG.magRangeYd) {
+      /*
+        At 2000 yd, stop zig-zag and enter warning-fire phase.
+        The bow remains pointed toward the target.
+      */
+      b.status = 'warning-fire';
+      b.interceptPhase = 'warning-fire';
+      desired = angleTo(b.pos(), target.pos());
+      speed = CONFIG.warningSpeedKt;
+
+      if (!target.warningLogged) {
+        target.warningLogged = true;
+        this.logTime(
+          `${b.id} reached 2000 yd from ${target.id}. Zig-zag stops. Warning flares alternate left and right.`
+        );
+      }
+
+    } else if (targetRigRange <= CONFIG.protectedPolyYd) {
+      /*
+        Emergency behavior only before the boat itself has reached
+        the 5000 yd target-relative zig-zag envelope.
+      */
+      b.status = 'direct-intercept';
+      desired = angleTo(b.pos(), target.pos());
+      speed = CONFIG.interceptSpeedKt;
+
+    } else if (b.id === 'BS 401') {
+      /*
+        BS 401 still uses the cut-off geometry first, but only while
+        it is farther than 5000 yd from the target. Once it reaches
+        5000 yd, the mandatory zig-zag branch above takes over.
+      */
+      const blockPoint = this.blockingPointFor(b, target);
+
+      if (dist(b.pos(), blockPoint) > 380 && b.interceptPhase !== 'closing') {
+        b.status = 'cutoff-point';
+        desired = angleTo(b.pos(), blockPoint);
+        speed = CONFIG.interceptSpeedKt;
+      } else {
+        b.interceptPhase = 'closing';
+        b.status = 'intercept-approach';
+        desired = angleTo(b.pos(), target.pos());
+        speed = CONFIG.interceptSpeedKt;
+      }
+
+    } else {
+      b.status = 'intercept-approach';
+      desired = angleTo(b.pos(), target.pos());
+      speed = CONFIG.interceptSpeedKt;
+    }
+
+    if (b.status === 'engage-mag' && b.magMissed && range <= 200) {
+      b.status = 'ram';
+      speed = CONFIG.maxSpeedKt;
+      this.logTime(`${b.id} is within 200 yd of ${target.id}. MAG failed, switching to collision intercept.`);
+
+      target.status = 'neutralized';
+      target.disabled = true;
+      b.disabled = true;
+      b.status = 'disabled';
+
+      this.logTime(`${target.id} neutralized by physical collision. ${b.id} is lost.`);
+
+      if (!this.hasActiveSuspiciousThreat()) UI.video.classList.add('hidden');
+
+      this.releaseInterceptor(b, 'lost');
+      continue;
+    }
+
+    if (b.status === 'engage-mag' && !this.safeToFire(b)) {
+      const around = angleTo(this.rig, target.pos()) + 90 * DEG;
+      const flank = {
+        x: target.x + Math.cos(around) * 600,
+        y: target.y + Math.sin(around) * 600
+      };
+
+      desired = angleTo(b.pos(), flank);
+      speed = 24;
+    }
+
+    b.move(dt, desired, speed);
+  }
+}
     requestApproval(target, interceptor) {
       if (target.approval === 'pending' || target.approval === 'approved') return;
       target.approval = 'pending';
