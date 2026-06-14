@@ -25,13 +25,6 @@
         <button class="speed-btn" data-speed="600">x600</button>
       </div>
       <div class="scenario-settings" aria-label="Scenario settings">
-        <label class="setting-field" for="timeOfDaySelect">
-          <span>Time of day</span>
-          <select id="timeOfDaySelect" class="setting-control">
-            <option value="day" selected>Day</option>
-            <option value="night">Night</option>
-          </select>
-        </label>
         <label class="setting-field" for="targetClassSelect">
           <span>Target class</span>
           <select id="targetClassSelect" class="setting-control">
@@ -65,6 +58,7 @@
         </div>
 
         <div id="mapNotice" class="map-notice hidden"></div>
+        <div id="dayNightIndicator" class="day-night-indicator" aria-live="polite"><span id="dayNightIcon" class="day-night-icon">☀</span><span id="dayNightLabel">Day</span></div>
         <div id="approvalModal" class="approval-banner hidden" role="dialog" aria-modal="false" aria-labelledby="approvalTitle">
           <div id="approvalCard" class="approval-card pending">
             <div class="approval-copy">

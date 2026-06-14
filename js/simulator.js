@@ -31,7 +31,9 @@
     videoThreatId: document.getElementById('videoThreatId'),
     videoSafetyText: document.getElementById('videoSafetyText'),
     mapNotice: document.getElementById('mapNotice'),
-    timeOfDay: document.getElementById('timeOfDaySelect'),
+    dayNightIndicator: document.getElementById('dayNightIndicator'),
+    dayNightIcon: document.getElementById('dayNightIcon'),
+    dayNightLabel: document.getElementById('dayNightLabel'),
     targetClass: document.getElementById('targetClassSelect'),
     staticPatrolRadius: document.getElementById('staticPatrolRadiusInput'),
     dynamicPatrolRadius: document.getElementById('dynamicPatrolRadiusDisplay'),
@@ -167,7 +169,7 @@
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
   function getDayPartFromHour(hour24) {
-    return hour24 >= 6 && hour24 < 18 ? 'day' : 'night';
+    return hour24 >= 6 && hour24 <= 18 ? 'day' : 'night';
   }
 
   class Boat {
@@ -233,7 +235,6 @@
       this.frameTime = 0;
       this.fps = 0;
       this.startHour = this.readMissionStartHour();
-      this.applyStartHourDefaults();
       this.previewScenario = this.readScenarioSettings();
       this.reset();
       this.bindEvents();
@@ -282,12 +283,8 @@
       return Number.isFinite(raw) ? clamp(Math.round(raw), 0, 23) : 12;
     }
 
-    applyStartHourDefaults() {
-      if (UI.timeOfDay) UI.timeOfDay.value = getDayPartFromHour(this.startHour);
-    }
-
     readScenarioSettings() {
-      const timeOfDay = UI.timeOfDay?.value === 'night' ? 'night' : 'day';
+      const timeOfDay = getDayPartFromHour(this.startHour);
       const targetClass = ['small', 'medium', 'large'].includes(UI.targetClass?.value) ? UI.targetClass.value : 'small';
       const rawStatic = Number(UI.staticPatrolRadius?.value || CONFIG.defaultStaticPatrolRadiusYd);
       const staticPatrolRadiusYd = clamp(Math.round(rawStatic || CONFIG.defaultStaticPatrolRadiusYd), 300, CONFIG.protectedPolyYd - 500);
@@ -519,7 +516,7 @@
           this.setSpeedMultiplier(Number(btn.dataset.speed));
         });
       });
-      [UI.timeOfDay, UI.targetClass, UI.staticPatrolRadius].forEach(control => {
+      [UI.targetClass, UI.staticPatrolRadius].forEach(control => {
         if (!control) return;
         control.addEventListener('change', () => {
           this.refreshScenarioPreview(this.running || this.time > 0);
@@ -1015,6 +1012,18 @@
         dayPart: getDayPartFromHour(hour24)
       };
     }
+
+    updateDayNightIndicator(dayPart) {
+      if (UI.dayNightIcon) UI.dayNightIcon.textContent = dayPart === 'day' ? '☀' : '☾';
+      if (UI.dayNightLabel) UI.dayNightLabel.textContent = titleCase(dayPart);
+      if (UI.dayNightIndicator) UI.dayNightIndicator.dataset.state = dayPart;
+    }
+    syncDayNightIndicator(dayPart) {
+      if (UI.dayNightIcon) UI.dayNightIcon.textContent = dayPart === 'day' ? '\u2600' : '\u263E';
+      if (UI.dayNightLabel) UI.dayNightLabel.textContent = titleCase(dayPart);
+      if (UI.dayNightIndicator) UI.dayNightIndicator.dataset.state = dayPart;
+    }
+
     requestApproval(target, interceptor) {
       if (target.approval === 'pending' || target.approval === 'approved') return;
       target.approval = 'pending';
@@ -1270,10 +1279,11 @@
     updateUI() {
       UI.fps.textContent = String(this.fps);
       UI.time.textContent = formatTime(this.time);
+      const clockState = this.getMissionClockState();
       if (UI.missionClock) {
-        const clockState = this.getMissionClockState();
         UI.missionClock.textContent = `${clockState.timeText} ${clockState.dayPart}`;
       }
+      this.syncDayNightIndicator(clockState.dayPart);
       const live = this.threats.filter(t => t.detected && !['neutralized', 'left-area', 'compliant'].includes(t.status)).length;
       const tracking = this.threats.filter(t => t.detected && t.status !== 'left-area').length;
       const hostile = this.threats.filter(t => ['suspicious', 'hostile', 'engaging'].includes(t.status)).length;

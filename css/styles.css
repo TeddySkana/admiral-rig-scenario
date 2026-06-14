@@ -349,6 +349,49 @@ h1 {
   font-weight: 850;
   text-align: center;
 }
+.day-night-indicator {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 24;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(126, 227, 255, 0.4);
+  background: rgba(4, 18, 29, 0.78);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  backdrop-filter: blur(6px);
+}
+.day-night-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--green);
+  font-size: 1rem;
+  line-height: 1;
+}
+.day-night-indicator[data-state="day"] {
+  border-color: rgba(255, 227, 129, 0.46);
+}
+.day-night-indicator[data-state="day"] .day-night-icon {
+  color: var(--yellow);
+}
+.day-night-indicator[data-state="night"] {
+  border-color: rgba(95, 184, 255, 0.42);
+}
+.day-night-indicator[data-state="night"] .day-night-icon {
+  color: var(--blue);
+}
 
 .approval-banner {
   position: absolute;
