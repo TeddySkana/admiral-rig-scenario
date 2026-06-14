@@ -164,6 +164,9 @@ h1 {
   align-items: center;
   margin-top: 18px;
 }
+.launch-setting {
+  min-width: 170px;
+}
 
 .btn {
   border: 1px solid var(--border);
@@ -311,6 +314,12 @@ h1 {
 .status-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .status-card { padding: 12px 14px; min-height: 70px; }
 .status-card strong { font-size: 1.22rem; }
+.status-detail {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  margin-top: 4px;
+}
 
 .lower-panels { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr); gap: 12px; margin-top: 12px; }
 .events, .threats { padding: 14px; min-height: 150px; }

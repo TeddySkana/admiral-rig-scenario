@@ -13,6 +13,7 @@
     speedButtons: Array.from(document.querySelectorAll('.speed-btn')),
     fps: document.querySelector('#fpsBadge strong'),
     time: document.getElementById('missionTime'),
+    missionClock: document.getElementById('missionClock'),
     live: document.getElementById('liveThreats'),
     tracking: document.getElementById('trackingCount'),
     hostile: document.getElementById('hostileCount'),
@@ -159,6 +160,15 @@
   function formatOpticalRanges(ranges) {
     return `Detect ${ranges.detect.toLocaleString()} yd / Recognize ${ranges.recognize.toLocaleString()} yd / Identify ${ranges.identify.toLocaleString()} yd`;
   }
+  function formatClockTime(totalSec) {
+    const normalized = ((Math.floor(totalSec) % 86400) + 86400) % 86400;
+    const h = Math.floor(normalized / 3600);
+    const m = Math.floor((normalized % 3600) / 60);
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+  function getDayPartFromHour(hour24) {
+    return hour24 >= 6 && hour24 < 18 ? 'day' : 'night';
+  }
 
   class Boat {
     constructor(id, type, x, y, heading, opts = {}) {
@@ -222,6 +232,8 @@
       this.frameCounter = 0;
       this.frameTime = 0;
       this.fps = 0;
+      this.startHour = this.readMissionStartHour();
+      this.applyStartHourDefaults();
       this.previewScenario = this.readScenarioSettings();
       this.reset();
       this.bindEvents();
@@ -262,6 +274,16 @@
       this.refreshScenarioPreview(false);
       this.updateSeedPanel();
       this.updateUI();
+    }
+
+    readMissionStartHour() {
+      const params = new URLSearchParams(window.location.search);
+      const raw = Number(params.get('startHour'));
+      return Number.isFinite(raw) ? clamp(Math.round(raw), 0, 23) : 12;
+    }
+
+    applyStartHourDefaults() {
+      if (UI.timeOfDay) UI.timeOfDay.value = getDayPartFromHour(this.startHour);
     }
 
     readScenarioSettings() {
@@ -983,6 +1005,16 @@
         b.move(dt, desired, speed);
       }
     }
+
+    getMissionClockState() {
+      const missionClockSec = this.startHour * 3600 + this.time;
+      const normalized = ((Math.floor(missionClockSec) % 86400) + 86400) % 86400;
+      const hour24 = Math.floor(normalized / 3600);
+      return {
+        timeText: formatClockTime(missionClockSec),
+        dayPart: getDayPartFromHour(hour24)
+      };
+    }
     requestApproval(target, interceptor) {
       if (target.approval === 'pending' || target.approval === 'approved') return;
       target.approval = 'pending';
@@ -1238,6 +1270,10 @@
     updateUI() {
       UI.fps.textContent = String(this.fps);
       UI.time.textContent = formatTime(this.time);
+      if (UI.missionClock) {
+        const clockState = this.getMissionClockState();
+        UI.missionClock.textContent = `${clockState.timeText} ${clockState.dayPart}`;
+      }
       const live = this.threats.filter(t => t.detected && !['neutralized', 'left-area', 'compliant'].includes(t.status)).length;
       const tracking = this.threats.filter(t => t.detected && t.status !== 'left-area').length;
       const hostile = this.threats.filter(t => ['suspicious', 'hostile', 'engaging'].includes(t.status)).length;

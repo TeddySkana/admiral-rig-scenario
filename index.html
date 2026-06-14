@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Skana - Admiral's Rig Protection Senario</title>
+  <title>Skana - Admiral's Rig Protection Scenario</title>
   <link rel="icon" href="assets/favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" href="assets/favicon.png" />
   <link rel="stylesheet" href="css/styles.css" />
@@ -61,9 +61,54 @@
       </section>
 
       <div class="landing-actions">
-        <a class="btn btn-primary launch-btn" href="./simulation.html"><span class="play-glyph"></span> Launch Offshore Mission</a>
+        <label class="setting-field launch-setting" for="missionStartHour">
+          <span>Mission start hour</span>
+          <select id="missionStartHour" class="setting-control">
+            <option value="0">0</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+            <option value="11">11</option>
+            <option value="12" selected>12</option>
+            <option value="13">13</option>
+            <option value="14">14</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+            <option value="17">17</option>
+            <option value="18">18</option>
+            <option value="19">19</option>
+            <option value="20">20</option>
+            <option value="21">21</option>
+            <option value="22">22</option>
+            <option value="23">23</option>
+          </select>
+        </label>
+        <a id="launchMissionBtn" class="btn btn-primary launch-btn" href="./simulation.html?startHour=12"><span class="play-glyph"></span> Launch Offshore Mission</a>
       </div>
     </section>
   </main>
+  <script>
+    (() => {
+      const hourSelect = document.getElementById('missionStartHour');
+      const launchBtn = document.getElementById('launchMissionBtn');
+      if (!hourSelect || !launchBtn) return;
+
+      const updateLaunchHref = () => {
+        const hour = Number(hourSelect.value);
+        const safeHour = Number.isFinite(hour) ? Math.max(0, Math.min(23, hour)) : 12;
+        launchBtn.href = `./simulation.html?startHour=${safeHour}`;
+      };
+
+      hourSelect.addEventListener('change', updateLaunchHref);
+      updateLaunchHref();
+    })();
+  </script>
 </body>
 </html>
