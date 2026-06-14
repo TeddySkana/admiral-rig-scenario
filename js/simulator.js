@@ -300,6 +300,50 @@
       };
     }
 
+    buildOperationalProfile(timeOfDay, baseScenario = null) {
+      const scenarioBase = baseScenario || this.activeScenario || this.readScenarioSettings();
+      const targetClass = scenarioBase.targetClass;
+      const staticPatrolRadiusYd = scenarioBase.staticPatrolRadiusYd;
+      const opticalRanges = getOpticalRanges(targetClass, timeOfDay);
+      const dynamicPatrolRadiusYd = computeDynamicPatrolRadiusYd(opticalRanges, staticPatrolRadiusYd);
+      return {
+        timeOfDay,
+        targetClass,
+        staticPatrolRadiusYd,
+        opticalRanges,
+        dynamicPatrolRadiusYd,
+        challengeEndRangeYd: Math.max(opticalRanges.identify, opticalRanges.detect - 2000)
+      };
+    }
+
+    refreshOperationalProfile() {
+      const clockState = this.getMissionClockState();
+      const nextProfile = this.buildOperationalProfile(clockState.dayPart, this.activeScenario);
+      const previousTimeOfDay = this.activeScenario?.timeOfDay;
+      const previousRadius = this.activeScenario?.dynamicPatrolRadiusYd;
+      const profileChanged = !this.activeScenario
+        || previousTimeOfDay !== nextProfile.timeOfDay
+        || previousRadius !== nextProfile.dynamicPatrolRadiusYd
+        || this.activeScenario.staticPatrolRadiusYd !== nextProfile.staticPatrolRadiusYd
+        || this.activeScenario.targetClass !== nextProfile.targetClass;
+
+      this.activeScenario = nextProfile;
+
+      for (const threat of this.threats) {
+        if (!threat || threat.disabled || threat.status === 'neutralized' || threat.status === 'left-area') continue;
+        if (!threat.detected || !threat.radioResolved) {
+          threat.timeOfDay = this.activeScenario.timeOfDay;
+          threat.opticalRanges = { ...this.activeScenario.opticalRanges };
+          threat.challengeEndRangeYd = this.activeScenario.challengeEndRangeYd;
+        }
+      }
+
+      if (profileChanged && previousTimeOfDay && previousTimeOfDay !== nextProfile.timeOfDay) {
+        this.logTime(`Mission clock crossed into ${nextProfile.timeOfDay}. Optical ranges and the dynamic patrol radius were recalculated to ${formatYd(nextProfile.dynamicPatrolRadiusYd)} for the current conditions.`);
+      }
+      if (profileChanged) this.updateSeedPanel();
+    }
+
     refreshScenarioPreview(showResetHint = false) {
       this.previewScenario = this.readScenarioSettings();
       if (UI.staticPatrolRadius) UI.staticPatrolRadius.value = String(this.previewScenario.staticPatrolRadiusYd);
@@ -553,6 +597,7 @@
         return;
       }
       this.time += dt;
+      this.refreshOperationalProfile();
       this.updatePatrols(dt);
       this.updateReserve(dt);
       this.updateNeutralTraffic(dt);
@@ -1279,6 +1324,8 @@
     updateUI() {
       UI.fps.textContent = String(this.fps);
       UI.time.textContent = formatTime(this.time);
+      if (UI.dynamicPatrolRadius) UI.dynamicPatrolRadius.textContent = formatYd(this.activeScenario.dynamicPatrolRadiusYd);
+      if (UI.opticalRanges) UI.opticalRanges.textContent = formatOpticalRanges(this.activeScenario.opticalRanges);
       const clockState = this.getMissionClockState();
       if (UI.missionClock) {
         UI.missionClock.textContent = `${clockState.timeText} ${clockState.dayPart}`;
