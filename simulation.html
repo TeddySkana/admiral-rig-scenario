@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Skana - Admiral's Rig Protection Senario</title>
+  <title>Skana - Admiral's Rig Protection Scenario</title>
   <link rel="icon" href="assets/favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" href="assets/favicon.png" />
   <link rel="stylesheet" href="css/styles.css" />
@@ -24,6 +24,36 @@
         <button class="speed-btn" data-speed="60">x60</button>
         <button class="speed-btn" data-speed="600">x600</button>
       </div>
+      <div class="scenario-settings" aria-label="Scenario settings">
+        <label class="setting-field" for="timeOfDaySelect">
+          <span>Time of day</span>
+          <select id="timeOfDaySelect" class="setting-control">
+            <option value="day" selected>Day</option>
+            <option value="night">Night</option>
+          </select>
+        </label>
+        <label class="setting-field" for="targetClassSelect">
+          <span>Target class</span>
+          <select id="targetClassSelect" class="setting-control">
+            <option value="small" selected>Small</option>
+            <option value="medium">Medium</option>
+            <option value="large">Large</option>
+          </select>
+        </label>
+        <label class="setting-field" for="staticPatrolRadiusInput">
+          <span>Static patrol radius</span>
+          <input id="staticPatrolRadiusInput" class="setting-control" type="number" min="300" max="4500" step="100" value="500" />
+        </label>
+        <div class="setting-field">
+          <span>Auto dynamic patrol</span>
+          <strong id="dynamicPatrolRadiusDisplay" class="setting-readout">3000 yd</strong>
+        </div>
+        <div class="setting-field setting-field-wide">
+          <span>Optical ranges</span>
+          <strong id="opticalRangesDisplay" class="setting-readout">Detect 7000 yd / Recognize 6000 yd / Identify 4000 yd</strong>
+        </div>
+        <div id="scenarioSettingsHint" class="setting-hint">Scenario changes update the preview now and apply to the mission on reset.</div>
+      </div>
     </nav>
 
     <section class="sim-layout">
@@ -40,7 +70,7 @@
             <div class="approval-copy">
               <p class="eyebrow">Headquarters authorization</p>
               <h2 id="approvalTitle">Waiting for violent interception approval</h2>
-              <p id="approvalText">The approval screen is red while HQ is reviewing the interception request.</p>
+              <p id="approvalText">HQ is reviewing a violent-interception request at the 1000 yd decision point.</p>
             </div>
             <div class="approval-actions">
               <button id="confirmApprovalBtn" class="btn btn-primary" disabled>Confirm Interception</button>
@@ -51,13 +81,13 @@
       </div>
 
       <aside class="side-panel panel-glass">
-        <div class="panel-title">Intelegance's mission state</div>
-        <div class="logic-step active" id="logicDetect">1. Radar detects small boats at 20000 yd</div>
-        <div class="logic-step" id="logicChallenge">2. Radio challenge and response decision</div>
-        <div class="logic-step" id="logicIntercept">3. Suspicious boats trigger interception</div>
-        <div class="logic-step" id="logicApproval">4. HQ approval for violent interception</div>
-        <div class="logic-step" id="logicWeapon">5. MAG engagement, 70% hit probability</div>
-        <div class="logic-step" id="logicRecover">6. Return to dynamic patrol ring</div>
+        <div class="panel-title">Intelligence's mission state</div>
+        <div class="logic-step active" id="logicDetect">1. Optical detection by rig sensors</div>
+        <div class="logic-step" id="logicChallenge">2. Radio challenge window and 30%/70% response decision</div>
+        <div class="logic-step" id="logicIntercept">3. Failed response starts 40 kt interception</div>
+        <div class="logic-step" id="logicApproval">4. 5000-2000 yd zigzag and warning flares</div>
+        <div class="logic-step" id="logicWeapon">5. Approval, MAG fire, 60° safety sector</div>
+        <div class="logic-step" id="logicRecover">6. Return to dynamic/static patrol</div>
         <div class="scenario-seed" id="scenarioSeed"></div>
         <div id="videoFeed" class="video-feed hidden">
           <div class="video-top"><span>BOW CAMERA</span><span id="videoThreatId">TARGET</span></div>
@@ -66,7 +96,7 @@
             <div class="video-target"></div>
             <div class="scan-line"></div>
           </div>
-          <div class="video-bottom">MAG SAFE ARC CHECK ACTIVE - DO NOT FIRE IF BOW POINTS TO RIG</div>
+          <div id="videoSafetyText" class="video-bottom">MAG 60° / 2100 yd safety sector clear</div>
         </div>
       </aside>
     </section>
@@ -87,7 +117,7 @@
       <div class="threats panel-glass">
         <div class="panel-title">Tracked Boats</div>
         <table>
-          <thead><tr><th>ID</th><th>Status</th><th>Range</th><th>Assigned</th></tr></thead>
+          <thead><tr><th>ID</th><th>Class</th><th>Phase</th><th>Assigned</th><th>Rig range</th><th>Interceptor range</th></tr></thead>
           <tbody id="threatTable"></tbody>
         </table>
       </div>

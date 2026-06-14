@@ -28,7 +28,14 @@
     cancelApproval: document.getElementById('cancelApprovalBtn'),
     video: document.getElementById('videoFeed'),
     videoThreatId: document.getElementById('videoThreatId'),
+    videoSafetyText: document.getElementById('videoSafetyText'),
     mapNotice: document.getElementById('mapNotice'),
+    timeOfDay: document.getElementById('timeOfDaySelect'),
+    targetClass: document.getElementById('targetClassSelect'),
+    staticPatrolRadius: document.getElementById('staticPatrolRadiusInput'),
+    dynamicPatrolRadius: document.getElementById('dynamicPatrolRadiusDisplay'),
+    opticalRanges: document.getElementById('opticalRangesDisplay'),
+    scenarioSettingsHint: document.getElementById('scenarioSettingsHint'),
     logic: {
       detect: document.getElementById('logicDetect'),
       challenge: document.getElementById('logicChallenge'),
@@ -63,11 +70,13 @@
 
   const CONFIG = {
     missionDurationSec: 11 * 3600,
-    radarRangeYd: 20000,
-    staticRingYd: 500,
-    patrolRingYd: 3000,
+    outerMapRingYd: 20000,
+    rigSafetyRingYd: 500,
+    defaultStaticPatrolRadiusYd: 500,
     protectedPolyYd: 5000,
     magRangeYd: 2000,
+    magSafetySectorRangeYd: 2100,
+    magSafetySectorAngleRad: 60 * DEG,
     magHitProbability: 0.70,
     safetyFromTargetYd: 500,
     reserveLaunchDelaySec: 5 * 60,
@@ -83,8 +92,22 @@
     neutralTrafficSpeedKt: 12,
     enemySpawnRadiusYd: 15000,
     yardsVisibleX: 15 * YD_PER_NAUTICAL_MILE,
-    yardsVisibleY: 15 * YD_PER_NAUTICAL_MILE,
-    safeBowConeRad: 34 * DEG
+    yardsVisibleY: 15 * YD_PER_NAUTICAL_MILE
+  };
+
+  const OPTICAL_RANGE_TABLE = {
+    small: {
+      day: { detect: 7000, recognize: 6000, identify: 4000 },
+      night: { detect: 5000, recognize: 4000, identify: 2000 }
+    },
+    medium: {
+      day: { detect: 10000, recognize: 8000, identify: 6000 },
+      night: { detect: 8000, recognize: 7000, identify: 5000 }
+    },
+    large: {
+      day: { detect: 18000, recognize: 14000, identify: 12000 },
+      night: { detect: 16000, recognize: 12000, identify: 10000 }
+    }
   };
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -102,6 +125,7 @@
   function angleDiff(a, b) { return Math.abs(wrapAngle(a - b)); }
   function polar(r, a) { return { x: Math.cos(a) * r, y: Math.sin(a) * r }; }
   function ktToYdSec(kt) { return kt * KNOT_TO_YD_PER_SEC; }
+  function titleCase(word) { return String(word || '').charAt(0).toUpperCase() + String(word || '').slice(1); }
   function formatTime(sec) {
     sec = Math.max(0, Math.floor(sec));
     const h = Math.floor(sec / 3600);
@@ -118,6 +142,23 @@
     return COLORS.blue;
   }
   function lineInterpolate(a, b, t) { return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }; }
+  function getOpticalRanges(targetClass, timeOfDay) {
+    const classKey = OPTICAL_RANGE_TABLE[targetClass] ? targetClass : 'small';
+    const timeKey = OPTICAL_RANGE_TABLE[classKey][timeOfDay] ? timeOfDay : 'day';
+    const ranges = OPTICAL_RANGE_TABLE[classKey][timeKey];
+    return { detect: ranges.detect, recognize: ranges.recognize, identify: ranges.identify };
+  }
+  function computeDynamicPatrolRadiusYd(ranges, staticRadiusYd) {
+    // The document requires the dynamic patrol radius to be selected
+    // automatically from the rig/COG geometry but does not give a precise
+    // formula. We bias toward staying inside the identification envelope while
+    // keeping separation from the user-set static guard and the 5000 yd area.
+    return clamp(ranges.identify - 1000, staticRadiusYd + 500, CONFIG.protectedPolyYd - 500);
+  }
+  function formatYd(value) { return `${Math.round(value).toLocaleString()} yd`; }
+  function formatOpticalRanges(ranges) {
+    return `Detect ${ranges.detect.toLocaleString()} yd / Recognize ${ranges.recognize.toLocaleString()} yd / Identify ${ranges.identify.toLocaleString()} yd`;
+  }
 
   class Boat {
     constructor(id, type, x, y, heading, opts = {}) {
@@ -181,8 +222,10 @@
       this.frameCounter = 0;
       this.frameTime = 0;
       this.fps = 0;
+      this.previewScenario = this.readScenarioSettings();
       this.reset();
       this.bindEvents();
+      this.refreshScenarioPreview(false);
       requestAnimationFrame(this.frame.bind(this));
     }
 
@@ -190,6 +233,8 @@
       this.time = 0;
       this.events = [];
       this.outcome = 'Nominal';
+      this.activeScenario = this.readScenarioSettings();
+      this.previewScenario = { ...this.activeScenario, opticalRanges: { ...this.activeScenario.opticalRanges } };
       if (this.approvalTimer) clearTimeout(this.approvalTimer);
       if (this.mapNoticeTimer) clearTimeout(this.mapNoticeTimer);
       this.approvalTimer = null;
@@ -198,8 +243,11 @@
       this.pendingApprovalThreatId = null;
       this.approvalPauseActive = false;
       this.modalOpen = false;
+      this.currentFireSector = null;
       this.rig = { x: 0, y: 0 };
-      this.attackMode = Math.random() < 0.5 ? 'coordinated' : 'separated';
+      this.secondSuspiciousDuringFirst = Math.random() < 0.40;
+      this.secondThreatScheduled = false;
+      this.secondThreatActivated = false;
       this.blue = [];
       this.threats = [];
       this.neutrals = [];
@@ -208,16 +256,46 @@
       this.initBoats();
       this.initThreatSchedule();
       this.initNeutralTraffic();
-      this.log('00:00', 'Mission loaded. Dynamic patrol, static guard, reserve boat, and neutral traffic are initialized.');
+      this.log('00:00', `Mission loaded. ${titleCase(this.activeScenario.timeOfDay)} / ${titleCase(this.activeScenario.targetClass)} hostile profile active, dynamic patrol auto-set to ${formatYd(this.activeScenario.dynamicPatrolRadiusYd)}, static guard set to ${formatYd(this.activeScenario.staticPatrolRadiusYd)}.`);
       this.log('00:00', this.describeSchedule());
       this.hideApproval(true);
+      this.refreshScenarioPreview(false);
       this.updateSeedPanel();
       this.updateUI();
     }
 
+    readScenarioSettings() {
+      const timeOfDay = UI.timeOfDay?.value === 'night' ? 'night' : 'day';
+      const targetClass = ['small', 'medium', 'large'].includes(UI.targetClass?.value) ? UI.targetClass.value : 'small';
+      const rawStatic = Number(UI.staticPatrolRadius?.value || CONFIG.defaultStaticPatrolRadiusYd);
+      const staticPatrolRadiusYd = clamp(Math.round(rawStatic || CONFIG.defaultStaticPatrolRadiusYd), 300, CONFIG.protectedPolyYd - 500);
+      const opticalRanges = getOpticalRanges(targetClass, timeOfDay);
+      const dynamicPatrolRadiusYd = computeDynamicPatrolRadiusYd(opticalRanges, staticPatrolRadiusYd);
+      return {
+        timeOfDay,
+        targetClass,
+        staticPatrolRadiusYd,
+        opticalRanges,
+        dynamicPatrolRadiusYd,
+        challengeEndRangeYd: Math.max(opticalRanges.identify, opticalRanges.detect - 2000)
+      };
+    }
+
+    refreshScenarioPreview(showResetHint = false) {
+      this.previewScenario = this.readScenarioSettings();
+      if (UI.staticPatrolRadius) UI.staticPatrolRadius.value = String(this.previewScenario.staticPatrolRadiusYd);
+      if (UI.dynamicPatrolRadius) UI.dynamicPatrolRadius.textContent = formatYd(this.previewScenario.dynamicPatrolRadiusYd);
+      if (UI.opticalRanges) UI.opticalRanges.textContent = formatOpticalRanges(this.previewScenario.opticalRanges);
+      if (UI.scenarioSettingsHint) {
+        UI.scenarioSettingsHint.textContent = showResetHint
+          ? 'Scenario changes update the preview now and apply to the live mission on reset.'
+          : 'Scenario changes update the preview now and apply to the mission on reset.';
+      }
+    }
+
     initBoats() {
-      const p401 = polar(CONFIG.patrolRingYd, -65 * DEG);
-      const p402 = polar(CONFIG.staticRingYd, 122 * DEG);
+      const p401 = polar(this.activeScenario.dynamicPatrolRadiusYd, -65 * DEG);
+      const p402 = polar(this.activeScenario.staticPatrolRadiusYd, 122 * DEG);
       this.blue.push(new Boat('BS 401', 'blue', p401.x, p401.y, -65 * DEG + Math.PI / 2, { role: 'dynamic-patrol', speedKt: CONFIG.cruiseSpeedKt, patrolAngle: -65 * DEG }));
       this.blue.push(new Boat('BS 402', 'blue', p402.x, p402.y, angleTo(p402, this.rig), { role: 'static-guard', speedKt: 0 }));
       this.blue.push(new Boat('BS 403', 'blue', 0, 0, 0, { role: 'reserve', status: 'reserve', visible: true, speedKt: 0 }));
@@ -237,48 +315,70 @@
       return Math.abs(point.x) > CONFIG.yardsVisibleX / 2 + margin || Math.abs(point.y) > CONFIG.yardsVisibleY / 2 + margin;
     }
 
-    initThreatSchedule() {
-      let times;
-      if (this.attackMode === 'coordinated') {
-        const t = rand(5 * 60, 15 * 60);
-        // Coordinated attack: both hostile boats enter together. Because both
-        // start at the same 15000 yd radius and use the same profile, they
-        // arrive at the radar ring and the rig together, from different angles.
-        times = [t, t];
-      } else {
-        times = [rand(5 * 60, 10 * 60), rand(15 * 60, 20 * 60)];
-      }
-      times.sort((a, b) => a - b);
-      const usedAngles = [];
-      times.forEach((activationTime, i) => {
-        let a = rand(0, TWO_PI);
-        if (usedAngles.length) {
-          const separation = rand(110 * DEG, 230 * DEG);
-          a = usedAngles[0] + choice([-1, 1]) * separation;
-        }
-        usedAngles.push(a);
-        const start = polar(CONFIG.enemySpawnRadiusYd, a);
-        const heading = angleTo(start, this.rig);
-        const responds = Math.random() < 0.30;
-        const b = new Boat(`TH-${String(i + 1).padStart(2, '0')}`, 'threat', start.x, start.y, heading, {
-          role: 'threat',
-          status: 'unknown',
-          speedKt: CONFIG.enemySlowKt,
-          visible: false,
-          detected: false,
-          responds
-        });
-        b.activationTime = activationTime;
-        b.spawnRadiusYd = CONFIG.enemySpawnRadiusYd;
-        b.enteredMapLogged = false;
-        b.evasiveSeed = Math.random() < CONFIG.hostileZigzagChance;
-        b.evasiveZigzagAngleDeg = rand(30, 60);
-        b.complianceTurn = choice([-1, 1]);
-        b.assignedBoats = [];
-        b.bs402SupportLogged = false;
-        b.massInterceptLogged = false;
-        this.threats.push(b);
+    buildThreat(id, activationTime, angle, spawnRadiusYd, opts = {}) {
+      const start = polar(spawnRadiusYd, angle);
+      const heading = angleTo(start, this.rig);
+      const responds = typeof opts.responds === 'boolean' ? opts.responds : Math.random() < 0.30;
+      const threat = new Boat(id, 'threat', start.x, start.y, heading, {
+        role: 'threat',
+        status: 'unknown',
+        speedKt: CONFIG.enemySlowKt,
+        visible: false,
+        detected: false,
+        responds
       });
+      threat.activationTime = activationTime;
+      threat.spawnRadiusYd = spawnRadiusYd;
+      threat.enteredMapLogged = false;
+      threat.evasiveSeed = Math.random() < CONFIG.hostileZigzagChance;
+      threat.evasiveZigzagAngleDeg = 30;
+      threat.complianceTurn = choice([-1, 1]);
+      threat.assignedBoats = [];
+      threat.bs402SupportLogged = false;
+      threat.massInterceptLogged = false;
+      threat.targetClass = this.activeScenario.targetClass;
+      threat.timeOfDay = this.activeScenario.timeOfDay;
+      threat.opticalRanges = { ...this.activeScenario.opticalRanges };
+      threat.challengeEndRangeYd = this.activeScenario.challengeEndRangeYd;
+      threat.radioChallengeStarted = false;
+      threat.radioResolved = false;
+      threat.phase = 'not detected';
+      threat.radioResultLabel = responds ? '30% compliant branch' : '70% no-response branch';
+      threat.branchTag = opts.branchTag || 'primary';
+      threat.deferredActivation = Boolean(opts.deferredActivation);
+      threat.deferredSpawnRadiusYd = opts.deferredSpawnRadiusYd || spawnRadiusYd;
+      threat.secondBranchThreat = Boolean(opts.secondBranchThreat);
+      threat.warningLogged = false;
+      threat.lightsFlaresLogged = false;
+      threat.lastSafetyBlocker = null;
+      return threat;
+    }
+
+    initThreatSchedule() {
+      const firstActivation = rand(5 * 60, 10 * 60);
+      const firstAngle = rand(0, TWO_PI);
+      this.threats.push(this.buildThreat('TH-01', firstActivation, firstAngle, CONFIG.enemySpawnRadiusYd, {
+        branchTag: 'primary',
+        responds: this.secondSuspiciousDuringFirst ? false : undefined
+      }));
+
+      if (this.secondSuspiciousDuringFirst) {
+        // The document requires the 40% branch to create a second suspicious
+        // target while the first is already being handled. To guarantee that
+        // overlap inside a short simulator run, the second contact is created
+        // in a deferred state and activated later from a closer range.
+        const secondAngle = firstAngle + choice([-1, 1]) * rand(110 * DEG, 220 * DEG);
+        const deferredRadius = Math.min(CONFIG.enemySpawnRadiusYd, this.activeScenario.opticalRanges.detect + 1200);
+        const secondThreat = this.buildThreat('TH-02', Infinity, secondAngle, deferredRadius, {
+          branchTag: 'second-suspicious-during-first',
+          deferredActivation: true,
+          deferredSpawnRadiusYd: deferredRadius,
+          secondBranchThreat: true,
+          responds: false
+        });
+        secondThreat.phase = 'awaiting branch trigger';
+        this.threats.push(secondThreat);
+      }
     }
 
     initNeutralTraffic() {
@@ -290,7 +390,7 @@
 
       // Civilian traffic is sampled as a short corner transit from outside one
       // map edge to outside an adjacent edge. This keeps the dashed white path
-      // visible inside the map while avoiding the large radar ring.
+      // visible inside the map while avoiding the large outer reference ring.
       let foundSafePath = false;
       for (let attempt = 0; attempt < 250; attempt += 1) {
         const sx = choice([-1, 1]);
@@ -308,7 +408,7 @@
         }
         if (Math.random() < 0.5) [start, end] = [end, start];
         pathClearanceYd = this.distancePointToSegment(this.rig, start, end);
-        if (pathClearanceYd > CONFIG.radarRangeYd + 150) {
+        if (pathClearanceYd > CONFIG.outerMapRingYd + 150) {
           foundSafePath = true;
           break;
         }
@@ -336,7 +436,7 @@
       civilian.pathEnd = end;
       civilian.pathClearanceYd = pathClearanceYd;
       this.neutrals.push(civilian);
-      this.log('00:00', `${civilian.id} neutral civilian transit is present on a dashed white path outside the ${CONFIG.radarRangeYd.toLocaleString()} yd radar ring.`);
+      this.log('00:00', `${civilian.id} neutral civilian transit is present on a dashed white path outside the ${CONFIG.outerMapRingYd.toLocaleString()} yd outer reference ring.`);
     }
 
     distancePointToSegment(point, a, b) {
@@ -366,7 +466,7 @@
       // BS 401 first cuts to a point on the threat-to-rig line instead of
       // chasing the threat immediately. Keep that blocking point between the
       // patrol ring and the protected polygon while the target is outside 5000 yd.
-      const minBlockRange = CONFIG.patrolRingYd;
+      const minBlockRange = this.activeScenario.dynamicPatrolRadiusYd;
       const maxBlockRange = Math.max(minBlockRange + 300, Math.min(CONFIG.protectedPolyYd, targetRigRange - 850));
       if (closestRigRange < minBlockRange || dist(closest, targetPos) < 850) {
         return polar(maxBlockRange, targetBearing);
@@ -375,10 +475,11 @@
     }
 
     describeSchedule() {
-      if (this.attackMode === 'coordinated') {
-        return `Attack schedule decided on load: coordinated arrival, both boats spawn together at 15000 yd near ${formatTime(this.threats[0].activationTime)}.`;
+      const primary = this.threats.find(t => t.id === 'TH-01');
+      if (this.secondSuspiciousDuringFirst) {
+        return `Attack schedule decided on load: TH-01 spawns at ${formatYd(primary.spawnRadiusYd)} near ${formatTime(primary.activationTime)}. The 40% second-suspicious branch is active and will trigger TH-02 while BS 401 is already handling TH-01.`;
       }
-      return `Attack schedule decided on load: separated arrival from 15000 yd, first near ${formatTime(this.threats[0].activationTime)}, second near ${formatTime(this.threats[1].activationTime)}.`;
+      return `Attack schedule decided on load: TH-01 spawns alone at ${formatYd(primary.spawnRadiusYd)} near ${formatTime(primary.activationTime)}. The 40% second-suspicious branch did not roll, so no simultaneous second hostile handling case is created in this run.`;
     }
 
     bindEvents() {
@@ -394,6 +495,13 @@
       UI.speedButtons.forEach(btn => {
         btn.addEventListener('click', () => {
           this.setSpeedMultiplier(Number(btn.dataset.speed));
+        });
+      });
+      [UI.timeOfDay, UI.targetClass, UI.staticPatrolRadius].forEach(control => {
+        if (!control) return;
+        control.addEventListener('change', () => {
+          this.refreshScenarioPreview(this.running || this.time > 0);
+          if (this.running || this.time > 0) this.showMapNotice('Scenario setting changes will apply after reset.', 2600);
         });
       });
       UI.confirmApproval.addEventListener('click', () => this.confirmApproval());
@@ -439,8 +547,10 @@
 
     updatePatrols(dt) {
       const patrol = this.blue.find(b => b.id === 'BS 401');
+      const dynamicRadius = this.activeScenario.dynamicPatrolRadiusYd;
+      const staticRadius = this.activeScenario.staticPatrolRadiusYd;
       if (patrol && patrol.role === 'returning-patrol' && !patrol.targetId) {
-        if (!patrol.returnPoint) patrol.returnPoint = this.closestPointOnCircle(patrol.pos(), CONFIG.patrolRingYd);
+        if (!patrol.returnPoint) patrol.returnPoint = this.closestPointOnCircle(patrol.pos(), dynamicRadius);
         const rangeToReturn = dist(patrol.pos(), patrol.returnPoint);
         if (rangeToReturn > 90) {
           patrol.status = 'returning-patrol';
@@ -454,9 +564,9 @@
         }
       }
       if (patrol && patrol.role === 'dynamic-patrol' && !patrol.targetId) {
-        const angularSpeed = ktToYdSec(CONFIG.cruiseSpeedKt) / CONFIG.patrolRingYd;
+        const angularSpeed = ktToYdSec(CONFIG.cruiseSpeedKt) / dynamicRadius;
         patrol.patrolAngle += angularSpeed * dt;
-        const p = polar(CONFIG.patrolRingYd, patrol.patrolAngle);
+        const p = polar(dynamicRadius, patrol.patrolAngle);
         patrol.x = p.x;
         patrol.y = p.y;
         patrol.heading = patrol.patrolAngle + Math.PI / 2;
@@ -466,7 +576,7 @@
       }
       const staticGuard = this.blue.find(b => b.id === 'BS 402');
       if (staticGuard && staticGuard.role === 'returning-static' && !staticGuard.targetId) {
-        if (!staticGuard.returnPoint) staticGuard.returnPoint = this.closestPointOnCircle(staticGuard.pos(), CONFIG.staticRingYd);
+        if (!staticGuard.returnPoint) staticGuard.returnPoint = this.closestPointOnCircle(staticGuard.pos(), staticRadius);
         const rangeToReturn = dist(staticGuard.pos(), staticGuard.returnPoint);
         if (rangeToReturn > 65) {
           staticGuard.status = 'returning-static';
@@ -491,7 +601,7 @@
         this.reserveLaunched = true;
         reserve.role = 'interceptor';
         reserve.status = 'patrol';
-        const p = polar(CONFIG.staticRingYd + 220, 20 * DEG);
+        const p = polar(this.activeScenario.staticPatrolRadiusYd + 220, 20 * DEG);
         reserve.setPos(p);
         reserve.heading = 20 * DEG;
         this.logTime('Reserve BS 403 launched after the five minute readiness delay.');
@@ -516,15 +626,16 @@
         if (dist(n.pos(), n.pathEnd) < 220 || this.isOutsideMapPoint(n.pos(), 3200)) {
           n.status = 'left-area';
           n.visible = false;
-          this.logTime(`${n.id} completed neutral transit. Its dashed path stayed outside the 20000 yd radar ring.`);
+          this.logTime(`${n.id} completed neutral transit. Its dashed path stayed outside the 20000 yd outer reference ring.`);
         }
       }
     }
 
     updateThreats(dt) {
+      this.maybeActivateSecondThreat();
       for (const t of this.threats) {
         if (t.status === 'neutralized' || t.status === 'left-area') continue;
-        if (this.time < t.activationTime) continue;
+        if (t.deferredActivation || this.time < t.activationTime) continue;
         if (!t.enteredMapLogged) {
           t.enteredMapLogged = true;
           this.setSpeedMultiplier(10);
@@ -532,64 +643,98 @@
         }
 
         const rangeRig = dist(t.pos(), this.rig);
-        if (!t.detected && rangeRig <= CONFIG.radarRangeYd) {
+        if (!t.detected && rangeRig <= t.opticalRanges.detect) {
           t.detected = true;
           t.visible = true;
           t.status = 'unknown';
+          t.phase = 'optical detected';
+          t.radioChallengeStarted = true;
           this.setLogic('detect');
           this.setSpeedMultiplier(10);
-          this.logTime(`${t.id} discovered by rig radar at ${Math.round(rangeRig)} yd. Detection message appears before interception begins, and simulation speed increased to x10 before the radio-response decision.`);
-          this.challengeThreat(t);
+          this.logTime(`${t.id} optical detection at ${Math.round(rangeRig)} yd. Rig sensors pass the contact to the patrol boat and the radio challenge window opens down to ${Math.round(t.challengeEndRangeYd)} yd.`);
         }
 
         if (!t.detected) {
+          t.phase = 'not detected';
           t.move(dt, angleTo(t.pos(), this.rig), CONFIG.enemySlowKt);
           continue;
         }
 
         if (t.status === 'compliant') {
+          t.phase = 'compliant';
           this.moveCompliantThreat(t, dt);
           continue;
         }
 
+        if (!t.radioResolved) {
+          t.phase = 'radio challenge';
+          t.move(dt, angleTo(t.pos(), this.rig), CONFIG.enemySlowKt);
+          if (rangeRig <= t.challengeEndRangeYd) this.challengeThreat(t);
+          continue;
+        }
+
         if (t.status === 'unknown') {
+          t.phase = 'optical detected';
           t.move(dt, angleTo(t.pos(), this.rig), CONFIG.enemySlowKt);
           continue;
         }
 
         if (t.status === 'suspicious' || t.status === 'hostile' || t.status === 'engaging') {
           this.moveHostileThreat(t, dt);
-          if (dist(t.pos(), this.rig) <= CONFIG.protectedPolyYd && t.status !== 'hostile') {
+          if (dist(t.pos(), this.rig) <= CONFIG.protectedPolyYd && t.status !== 'hostile' && t.status !== 'engaging') {
             t.status = 'hostile';
+            t.phase = 'hostile';
             this.setLogic('intercept', 'danger');
-            this.logTime(`${t.id} penetrated the 5000 yd and is now hostile.`);
+            this.logTime(`${t.id} penetrated the 5000 yd protected area and is now hostile.`);
           }
         }
 
         if (Math.abs(t.x) > CONFIG.yardsVisibleX * 0.75 || Math.abs(t.y) > CONFIG.yardsVisibleY * 0.85) {
           if (t.status === 'compliant') {
             t.status = 'left-area';
+            t.visible = false;
             this.logTime(`${t.id} complied, avoided the protected polygon, and left the monitored area.`);
           }
         }
       }
     }
 
+    maybeActivateSecondThreat() {
+      if (!this.secondSuspiciousDuringFirst || this.secondThreatScheduled) return;
+      const primaryThreat = this.threats.find(t => t.id === 'TH-01');
+      const patrol = this.blue.find(b => b.id === 'BS 401');
+      const secondThreat = this.threats.find(t => t.secondBranchThreat);
+      if (!primaryThreat || !patrol || !secondThreat) return;
+      if (!['suspicious', 'hostile', 'engaging'].includes(primaryThreat.status)) return;
+      if (patrol.targetId !== primaryThreat.id) return;
+      secondThreat.deferredActivation = false;
+      secondThreat.activationTime = this.time + rand(2 * 60, 4 * 60);
+      secondThreat.spawnRadiusYd = secondThreat.deferredSpawnRadiusYd;
+      secondThreat.phase = 'queued for second branch';
+      this.secondThreatScheduled = true;
+      this.logTime(`40% second-suspicious branch triggered. TH-02 will activate while BS 401 is already handling TH-01, which will force BS 402 off static guard only if TH-02 also fails its radio challenge.`);
+      this.updateSeedPanel();
+    }
+
     challengeThreat(t) {
       this.setLogic('challenge');
+      t.radioResolved = true;
       if (t.responds) {
         t.status = 'compliant';
+        t.phase = 'compliant';
         t.speedKt = 10;
         this.prepareCompliantEscape(t);
-        this.logTime(`${t.id} identified by radio. It remains green and exits the map on a safe course outside the 5000 yd polygon.`);
+        this.logTime(`${t.id} reached the radio challenge decision line at ${Math.round(dist(t.pos(), this.rig))} yd and responded. It is no longer suspicious, and blue forces continue patrol while it exits safely.`);
       } else {
         t.status = 'suspicious';
+        t.phase = 'suspicious';
         t.speedKt = CONFIG.enemyAttackKt;
         this.setLogic('intercept', 'warning');
-        this.logTime(`${t.id} did not respond. Status changed from green to orange and interception begins.`);
-        this.showMapNotice(`${t.id} failed the radio challenge. Interception is starting.`, 5000);
+        this.logTime(`${t.id} reached the radio challenge decision line at ${Math.round(dist(t.pos(), this.rig))} yd and did not respond. Status changes to suspicious and the target accelerates to 45 kt toward the rig.`);
+        this.showMapNotice(`${t.id} failed the radio challenge. 40 kt interception is starting.`, 5000);
         this.assignInterceptor(t);
       }
+      this.updateSeedPanel();
     }
 
     prepareCompliantEscape(t) {
@@ -633,7 +778,7 @@
       if (t.evasiveZigzag) {
         t.zigzagClock += dt;
         const wave = Math.sign(Math.sin(t.zigzagClock / 10)) || 1;
-        const zigzagAngle = clamp(t.evasiveZigzagAngleDeg || 45, 30, 60);
+        const zigzagAngle = clamp(t.evasiveZigzagAngleDeg || 30, 30, 30);
         desired += wave * zigzagAngle * DEG;
         speed = CONFIG.hostileZigzagSpeedKt;
       }
@@ -665,7 +810,10 @@
       boat.targetId = threat.id;
       boat.role = 'interceptor';
       boat.status = 'intercept-approach';
-      boat.interceptPhase = boat.id === 'BS 401' ? 'blocking-point' : 'direct';
+      boat.interceptPhase = 'closing-40kt';
+      boat.zigzagClock = 0;
+      boat.interceptFlareSide = 1;
+      boat.flankSide = choice([-1, 1]);
       if (!Array.isArray(threat.assignedBoats)) threat.assignedBoats = [];
       if (!threat.assignedBoats.includes(boat.id)) threat.assignedBoats.push(boat.id);
       threat.assignedTo = threat.assignedBoats.join(', ');
@@ -673,11 +821,21 @@
     }
 
     assignInterceptor(t) {
-      const candidates = this.blue.filter(b => !b.disabled && !b.targetId && (b.id === 'BS 401' || (b.id === 'BS 403' && this.reserveLaunched) || b.id === 'BS 402'));
-      candidates.sort((a, b) => dist(a.pos(), t.pos()) - dist(b.pos(), t.pos()));
-      const chosenBoat = candidates.find(b => b.id === 'BS 401') || candidates.find(b => b.id === 'BS 403') || candidates.find(b => b.id === 'BS 402') || candidates[0];
+      const bs401Busy = this.blue.some(b => b.id === 'BS 401' && b.targetId && b.targetId !== t.id);
+      const preferredIds = t.secondBranchThreat && bs401Busy ? ['BS 402', 'BS 403', 'BS 401'] : ['BS 401', 'BS 403'];
+      const candidates = preferredIds
+        .map(id => this.blue.find(b => b.id === id))
+        .filter(b => b && !b.disabled && !b.targetId && (b.id !== 'BS 403' || this.reserveLaunched));
+      const chosenBoat = candidates[0];
       if (this.assignBoatToThreat(chosenBoat, t)) {
-        this.logTime(`${chosenBoat.id} assigned to intercept ${t.id}.`);
+        if (chosenBoat.id === 'BS 402' && t.secondBranchThreat && !t.bs402SupportLogged) {
+          t.bs402SupportLogged = true;
+          this.logTime(`TH-02 became the second suspicious target while BS 401 was already committed. BS 402 leaves the ${formatYd(this.activeScenario.staticPatrolRadiusYd)} static guard ring to handle it.`);
+        }
+        if (!t.lightsFlaresLogged) {
+          t.lightsFlaresLogged = true;
+          this.logTime(`${chosenBoat.id} assigned to intercept ${t.id}. The boat points its bow at the target, accelerates to 40 kt, and uses lights and flares while closing.`);
+        }
       } else {
         this.requestReserve();
         this.logTime(`${t.id} is suspicious, but no free interceptor is available yet.`);
@@ -694,34 +852,48 @@
         .sort((a, b) => dist(a.pos(), this.rig) - dist(b.pos(), this.rig));
       if (!active.length) return;
 
-      const nearSixThousand = active.find(t => dist(t.pos(), this.rig) <= 6000);
-      if (nearSixThousand) {
-        const bs402 = this.blue.find(b => b.id === 'BS 402' && !b.disabled);
-        if (bs402 && bs402.targetId !== nearSixThousand.id && this.assignBoatToThreat(bs402, nearSixThousand, false)) {
-          if (!nearSixThousand.bs402SupportLogged) {
-            nearSixThousand.bs402SupportLogged = true;
-            this.logTime(`${nearSixThousand.id} crossed the 6000 yd radius. BS 402 leaves static guard and joins the interception.`);
-          }
-        }
-      }
-
       const insideProtected = active.find(t => dist(t.pos(), this.rig) <= CONFIG.protectedPolyYd);
-      if (insideProtected) {
+      if (insideProtected && (!insideProtected.assignedBoats || insideProtected.assignedBoats.length === 0)) {
         if (!insideProtected.massInterceptLogged) {
           insideProtected.massInterceptLogged = true;
-          this.logTime(`${insideProtected.id} is inside the 5000 yd. All available blue vessels drive directly toward the threat.`);
+          this.logTime(`${insideProtected.id} is inside the 5000 yd protected area without an assigned interceptor. Emergency fallback releases any free blue boat, including BS 402 if required.`);
         }
         for (const boat of this.blue) {
           if (boat.id === 'BS 403' && !this.reserveLaunched) {
             this.requestReserve();
             continue;
           }
-          this.assignBoatToThreat(boat, insideProtected, true);
+          if (!boat.targetId) this.assignBoatToThreat(boat, insideProtected, true);
         }
       }
     }
 
+    computeInterceptZigzagAngleDeg(interceptor, target, range) {
+      const targetSpeedFactor = clamp(target.speedKt / CONFIG.enemyAttackKt, 0, 1);
+      const offAxisFactor = clamp(angleDiff(interceptor.heading, angleTo(interceptor.pos(), target.pos())) / (60 * DEG), 0, 1);
+      return clamp(30 + targetSpeedFactor * 18 + offAxisFactor * 12, 30, 60);
+    }
+
+    projectedRangeAfterMove(boat, target, dt, desiredHeading, speedKt) {
+      const next = {
+        x: boat.x + Math.cos(desiredHeading) * ktToYdSec(speedKt) * dt,
+        y: boat.y + Math.sin(desiredHeading) * ktToYdSec(speedKt) * dt
+      };
+      return dist(next, target.pos());
+    }
+
+    computeSafeFlankPoint(interceptor, target) {
+      const base = angleTo(interceptor.pos(), target.pos());
+      interceptor.flankSide = interceptor.flankSide || choice([-1, 1]);
+      const offset = interceptor.flankSide * 90 * DEG;
+      return {
+        x: target.x + Math.cos(base + offset) * 700,
+        y: target.y + Math.sin(base + offset) * 700
+      };
+    }
+
     updateInterceptors(dt) {
+      this.currentFireSector = null;
       for (const b of this.blue) {
         if (!b.targetId || b.disabled) continue;
         const target = this.threats.find(t => t.id === b.targetId);
@@ -731,78 +903,82 @@
         }
 
         const range = dist(b.pos(), target.pos());
-        const targetRigRange = dist(target.pos(), this.rig);
         let desired = angleTo(b.pos(), target.pos());
         let speed = CONFIG.interceptSpeedKt;
 
-        if (range <= 1000) {
-          speed = CONFIG.warningSpeedKt;
-          if (target.approval !== 'approved') {
-            b.status = 'await-approval';
-            this.requestApproval(target, b);
-          } else {
-            b.status = 'engage-mag';
-            this.engageMag(b, target, range);
-          }
-        } else if (targetRigRange <= CONFIG.protectedPolyYd) {
-          // Once the threat is inside the protected polygon, every assigned blue
-          // vessel points its bow directly at the threat and closes distance.
-          b.status = 'direct-intercept';
-          desired = angleTo(b.pos(), target.pos());
-          speed = CONFIG.interceptSpeedKt;
-        } else if (b.id === 'BS 401') {
-          // BS 401 uses a cut-off geometry first: reach the nearest blocking
-          // point on the threat-to-rig line, then close toward the threat.
-          const blockPoint = this.blockingPointFor(b, target);
-          if (dist(b.pos(), blockPoint) > 380 && b.interceptPhase !== 'closing') {
-            b.status = 'cutoff-point';
-            desired = angleTo(b.pos(), blockPoint);
-            speed = CONFIG.interceptSpeedKt;
-          } else {
-            b.interceptPhase = 'closing';
-            b.status = 'intercept-approach';
-            desired = angleTo(b.pos(), target.pos());
-            speed = CONFIG.interceptSpeedKt;
-          }
-        } else if (range > CONFIG.protectedPolyYd) {
-          b.status = 'intercept-approach';
-          speed = CONFIG.interceptSpeedKt;
-        } else if (range > CONFIG.magRangeYd) {
-          b.status = 'zigzag-warning';
-          b.zigzagClock += dt;
-          const wave = Math.sign(Math.sin(b.zigzagClock / 12)) || 1;
-          const targetSpeedFactor = clamp(target.speedKt / CONFIG.enemyAttackKt, 0, 1);
-          const angle = (30 + 30 * targetSpeedFactor) * DEG;
-          desired += wave * angle;
-          speed = CONFIG.zigzagSpeedKt;
-        } else {
-          b.status = 'warning-fire';
-          speed = CONFIG.warningSpeedKt;
-          if (!target.warningLogged) {
-            target.warningLogged = true;
-            this.logTime(`${b.id} reached 2000 yd from ${target.id}. Zigzag stops. Warning flares alternate left and right.`);
-          }
-        }
-
-        if (b.status === 'engage-mag' && b.magMissed && range <= 200) {
+        if (b.magMissed && range <= 200) {
           b.status = 'ram';
           speed = CONFIG.maxSpeedKt;
-          this.logTime(`${b.id} is within 200 yd of ${target.id}. MAG failed, switching to collision intercept.`);
+          target.phase = 'ramming fallback';
+          this.logTime(`${b.id} is within 200 yd of ${target.id}. MAG failed, so the boat switches to max-speed chase and ramming as a lower-quality last-resort outcome.`);
           target.status = 'neutralized';
           target.disabled = true;
+          target.phase = 'neutralized';
           b.disabled = true;
           b.status = 'disabled';
-          this.logTime(`${target.id} neutralized by physical collision. ${b.id} is lost.`);
+          this.logTime(`${target.id} neutralized by physical collision. ${b.id} is lost in the ramming fallback.`);
           if (!this.hasActiveSuspiciousThreat()) UI.video.classList.add('hidden');
           this.releaseInterceptor(b, 'lost');
           continue;
         }
 
-        if (b.status === 'engage-mag' && !this.safeToFire(b)) {
-          const around = angleTo(this.rig, target.pos()) + 90 * DEG;
-          const flank = { x: target.x + Math.cos(around) * 600, y: target.y + Math.sin(around) * 600 };
-          desired = angleTo(b.pos(), flank);
-          speed = 24;
+        if (range <= 1000) {
+          speed = CONFIG.warningSpeedKt;
+          if (target.approval !== 'approved') {
+            b.status = 'await-approval';
+            target.phase = 'awaiting approval';
+            this.requestApproval(target, b);
+          } else {
+            b.status = 'engage-mag';
+            target.phase = 'engaging';
+            const sector = this.isFireSectorClear(b, target);
+            if (!sector.clear) {
+              const blockerName = sector.blocker?.id || 'protected object';
+              if (target.lastSafetyBlocker !== blockerName) {
+                target.lastSafetyBlocker = blockerName;
+                this.logTime(`${b.id} holds MAG fire. ${blockerName} is inside the MAG 60° / 2100 yd safety sector, so the boat keeps maneuvering for a safe flank.`);
+              }
+              const flank = this.computeSafeFlankPoint(b, target);
+              desired = angleTo(b.pos(), flank);
+              speed = 24;
+            } else {
+              target.lastSafetyBlocker = null;
+              this.engageMag(b, target, range);
+            }
+          }
+        } else if (range <= 2000) {
+          b.status = 'warning-fire';
+          target.phase = 'warning';
+          this.setLogic('approval', 'warning', false);
+          desired = angleTo(b.pos(), target.pos());
+          b.interceptFlareSide *= -1;
+          speed = CONFIG.warningSpeedKt;
+          if (!target.warningLogged) {
+            target.warningLogged = true;
+            this.logTime(`${b.id} reached 2000 yd from ${target.id}. Zigzag stops, the bow stays on target, warning flares alternate 30° left and right, and speed settles at 30 kt.`);
+          }
+        } else if (range <= 5000) {
+          b.status = 'zigzag-warning';
+          target.phase = 'zigzag intercept';
+          this.setLogic('approval', 'warning', false);
+          b.zigzagClock += dt;
+          const wave = Math.sign(Math.sin(b.zigzagClock / 9)) || 1;
+          const angleDeg = this.computeInterceptZigzagAngleDeg(b, target, range);
+          const zigzagDesired = desired + wave * angleDeg * DEG;
+          if (this.projectedRangeAfterMove(b, target, dt, zigzagDesired, CONFIG.zigzagSpeedKt) < 450) {
+            desired = angleTo(b.pos(), target.pos());
+          } else {
+            desired = zigzagDesired;
+          }
+          speed = CONFIG.zigzagSpeedKt;
+          if (!target.zigzagLogged) {
+            target.zigzagLogged = true;
+            this.logTime(`${b.id} reached 5000 yd from ${target.id}. It begins a 20 kt intercept zigzag with warning flares while preserving firing-entry geometry.`);
+          }
+        } else {
+          b.status = 'intercept-approach';
+          target.phase = 'suspicious';
+          speed = CONFIG.interceptSpeedKt;
         }
         b.move(dt, desired, speed);
       }
@@ -812,8 +988,8 @@
       target.approval = 'pending';
       this.pendingApprovalThreatId = target.id;
       this.approvalPauseActive = true;
-      this.setLogic('approval', 'danger');
-      this.logTime(`${interceptor.id} reached 1000 yd from ${target.id}. Violent interception approval requested. Simulation paused for HQ response.`);
+      this.setLogic('weapon', 'danger');
+      this.logTime(`${interceptor.id} reached 1000 yd from ${target.id}. Operator/HQ violent-interception approval requested. Simulation paused for HQ response.`);
       this.showApproval(target);
       this.running = false;
       this.approvalTimer = setTimeout(() => {
@@ -821,7 +997,7 @@
           UI.approvalCard.classList.remove('pending');
           UI.approvalCard.classList.add('approved');
           UI.approvalTitle.textContent = 'HQ approved violent interception';
-          UI.approvalText.textContent = 'The approval screen is green. Confirm interception or cancel the display to continue the simulation at x1.';
+          UI.approvalText.textContent = 'The approval screen is green. Confirm violent interception to continue with MAG fire under the 60° / 2100 yd safety-sector check.';
           UI.confirmApproval.disabled = false;
           this.showVideoFor(target);
         }
@@ -836,7 +1012,7 @@
       UI.approvalCard.classList.add('pending');
       UI.approvalCard.classList.remove('approved');
       UI.approvalTitle.textContent = `Waiting for violent interception approval for ${target.id}`;
-      UI.approvalText.textContent = 'HQ review in progress. The simulation is paused; the screen will turn green after five seconds or continue when you cancel the display.';
+      UI.approvalText.textContent = 'HQ review in progress at the 1000 yd decision point. The simulation is paused; the screen will turn green after five seconds or continue when you cancel the display.';
       UI.confirmApproval.disabled = true;
       UI.videoThreatId.textContent = target.id;
     }
@@ -856,6 +1032,7 @@
       if (!target) return;
       UI.video.classList.remove('hidden');
       UI.videoThreatId.textContent = target.id;
+      this.updateVideoSafetyText();
     }
 
     showMapNotice(message, durationMs = 5000) {
@@ -873,12 +1050,15 @@
       if (target && target.approval === 'pending') {
         target.approval = 'approved';
         target.status = 'engaging';
+        target.phase = 'engaging';
         if (target.evasiveSeed) {
           target.evasiveZigzag = true;
-          this.logTime(`${target.id} begins evasive zigzag at 20 kt, angled ${Math.round(target.evasiveZigzagAngleDeg || 45)} degrees off-axis after weapon engagement starts.`);
+          this.logTime(`${target.id} begins evasive zigzag at 20 kt with a fixed 30° weave after MAG fire starts.`);
+        } else {
+          this.logTime(`${target.id} keeps charging straight at max attack speed even after MAG fire begins.`);
         }
         this.setLogic('weapon', 'danger');
-        this.logTime(`HQ approval confirmed for ${target.id}. MAG engagement authorized at 70% hit probability.`);
+        this.logTime(`HQ approval confirmed for ${target.id}. MAG engagement authorized with 70% hit probability and a 60° / 2100 yd safety-sector check.`);
       }
       this.hideApproval(false);
       this.showVideoFor(target);
@@ -891,9 +1071,12 @@
       if (target && target.approval === 'pending') {
         target.approval = 'approved';
         target.status = 'engaging';
+        target.phase = 'engaging';
         if (target.evasiveSeed) {
           target.evasiveZigzag = true;
-          this.logTime(`${target.id} begins evasive zigzag at 20 kt, angled ${Math.round(target.evasiveZigzagAngleDeg || 45)} degrees off-axis after weapon engagement starts.`);
+          this.logTime(`${target.id} begins evasive zigzag at 20 kt with a fixed 30° weave after MAG fire starts.`);
+        } else {
+          this.logTime(`${target.id} keeps charging straight at max attack speed even after MAG fire begins.`);
         }
         this.setLogic('weapon', 'danger');
         this.logTime('Approval display cancelled by the user. HQ approval is treated as received and the simulation continues at x1.');
@@ -906,27 +1089,73 @@
       this.running = true;
     }
 
-    safeToFire(b) {
-      const toRig = angleTo(b.pos(), this.rig);
-      return angleDiff(b.heading, toRig) > CONFIG.safeBowConeRad;
+    updateVideoSafetyText(message = 'MAG 60° / 2100 yd safety sector clear') {
+      if (UI.videoSafetyText) UI.videoSafetyText.textContent = message;
+    }
+
+    getProtectedObjects() {
+      return [
+        { id: 'Rig', x: this.rig.x, y: this.rig.y },
+        { id: 'Rig north structure', x: this.rig.x, y: this.rig.y - 90 },
+        { id: 'Rig south structure', x: this.rig.x, y: this.rig.y + 90 },
+        { id: 'Rig east structure', x: this.rig.x + 110, y: this.rig.y },
+        { id: 'Rig west structure', x: this.rig.x - 110, y: this.rig.y }
+      ];
+    }
+
+    isFireSectorClear(shooter, target) {
+      const origin = shooter.pos();
+      const fireHeading = angleTo(origin, target.pos());
+      const halfAngle = CONFIG.magSafetySectorAngleRad / 2;
+      const blockers = [];
+      const registerBlocker = (obj, category) => {
+        const objectPoint = typeof obj.pos === 'function' ? obj.pos() : obj;
+        const range = dist(origin, objectPoint);
+        if (range > CONFIG.magSafetySectorRangeYd || range < 1) return;
+        const bearing = angleTo(origin, objectPoint);
+        if (angleDiff(fireHeading, bearing) <= halfAngle) blockers.push({ id: obj.id, range, category, point: objectPoint });
+      };
+
+      for (const blue of this.blue) {
+        if (blue.id === shooter.id || blue.disabled) continue;
+        registerBlocker(blue, 'blue vessel');
+      }
+      for (const neutral of this.neutrals) {
+        if (!neutral.visible || neutral.status === 'left-area') continue;
+        registerBlocker(neutral, 'neutral vessel');
+      }
+      for (const object of this.getProtectedObjects()) registerBlocker(object, 'protected object');
+
+      blockers.sort((a, b) => a.range - b.range);
+      this.currentFireSector = {
+        shooterId: shooter.id,
+        targetId: target.id,
+        origin,
+        heading: fireHeading,
+        halfAngle,
+        rangeYd: CONFIG.magSafetySectorRangeYd,
+        blockers
+      };
+      if (blockers.length) this.updateVideoSafetyText(`MAG 60° / 2100 yd sector blocked by ${blockers[0].id}`);
+      else this.updateVideoSafetyText();
+      return { clear: blockers.length === 0, blocker: blockers[0] || null, blockers };
+    }
+
+    safeToFire(b, target) {
+      return this.isFireSectorClear(b, target).clear;
     }
 
     engageMag(b, target, range) {
       if (range > CONFIG.magRangeYd) return;
-      if (!this.safeToFire(b)) {
-        if (!target.safeHoldLogged) {
-          target.safeHoldLogged = true;
-          this.logTime(`${b.id} holds MAG fire: bow cone points toward the rig. Moving to a safer firing angle.`);
-        }
-        return;
-      }
+      if (!this.safeToFire(b, target)) return;
       if (this.time < b.nextShotAt) return;
       b.nextShotAt = this.time + 5;
       const hit = Math.random() < CONFIG.magHitProbability;
       if (hit) {
         target.status = 'neutralized';
+        target.phase = 'neutralized';
         target.disabled = true;
-        this.logTime(`${b.id} MAG burst hit ${target.id}. Target neutralized.`);
+        this.logTime(`${b.id} MAG burst hit ${target.id}. Target neutralized and ${b.id} returns to the computed dynamic/static patrol scheme.`);
         if (!this.hasActiveSuspiciousThreat()) UI.video.classList.add('hidden');
         this.releaseInterceptor(b, 'return');
         if (this.hasActiveSuspiciousThreat()) this.setLogic('intercept', 'danger', false);
@@ -952,12 +1181,12 @@
       if (b.id === 'BS 401') {
         b.role = 'returning-patrol';
         b.status = 'returning-patrol';
-        b.returnPoint = this.closestPointOnCircle(b.pos(), CONFIG.patrolRingYd);
+        b.returnPoint = this.closestPointOnCircle(b.pos(), this.activeScenario.dynamicPatrolRadiusYd);
         b.patrolAngle = angleTo(this.rig, b.returnPoint);
       } else if (b.id === 'BS 402') {
         b.role = 'returning-static';
         b.status = 'returning-static';
-        b.returnPoint = this.closestPointOnCircle(b.pos(), CONFIG.staticRingYd);
+        b.returnPoint = this.closestPointOnCircle(b.pos(), this.activeScenario.staticPatrolRadiusYd);
       } else if (b.id === 'BS 403') {
         b.role = 'interceptor';
         b.status = 'patrol';
@@ -966,7 +1195,11 @@
         b.role = 'static-guard';
         b.status = 'static-guard';
       }
-      if (mode === 'return') this.logTime(`${b.id} released from ${oldTarget} and returning to the nearest point on its patrol ring before resuming patrol.`);
+      if (mode === 'return') {
+        if (b.id === 'BS 401') this.logTime(`${b.id} released from ${oldTarget} and returning to the computed dynamic patrol radius at ${formatYd(this.activeScenario.dynamicPatrolRadiusYd)}.`);
+        else if (b.id === 'BS 402') this.logTime(`${b.id} released from ${oldTarget} and returning to the static guard ring at ${formatYd(this.activeScenario.staticPatrolRadiusYd)}.`);
+        else this.logTime(`${b.id} released from ${oldTarget} and returning to patrol.`);
+      }
     }
 
     hasActiveSuspiciousThreat() {
@@ -988,7 +1221,7 @@
       }
       for (const t of this.threats) {
         if (t.status === 'suspicious' || t.status === 'hostile' || t.status === 'engaging') {
-          if (dist(t.pos(), this.rig) <= CONFIG.staticRingYd) {
+          if (dist(t.pos(), this.rig) <= CONFIG.rigSafetyRingYd) {
             this.outcome = `Mission failed: ${t.id} reached the rig safety ring`;
             this.logTime(this.outcome);
             this.running = false;
@@ -996,7 +1229,7 @@
           }
           if (dist(t.pos(), this.rig) <= CONFIG.protectedPolyYd && !t.penetrationLogged) {
             t.penetrationLogged = true;
-            this.logTime(`${t.id} entered the 5000 yd. Mission continues; failure is only inside the 500 yd ring.`);
+            this.logTime(`${t.id} entered the 5000 yd protected area. Mission continues; failure is only inside the 500 yd rig safety ring.`);
           }
         }
       }
@@ -1012,29 +1245,46 @@
       UI.tracking.textContent = String(tracking);
       UI.hostile.textContent = String(hostile);
       UI.missionStatus.textContent = this.outcome;
+      if (!this.currentFireSector) this.updateVideoSafetyText();
       this.updateThreatTable();
+    }
+
+    getThreatPhaseLabel(t) {
+      if (!t.detected) return t.phase || 'not detected';
+      if (t.phase) return t.phase;
+      if (t.status === 'compliant') return 'compliant';
+      if (t.status === 'neutralized') return 'neutralized';
+      return t.status;
     }
 
     updateThreatTable() {
       UI.table.innerHTML = '';
       for (const t of this.threats) {
         const tr = document.createElement('tr');
-        const range = t.detected ? `${Math.round(dist(t.pos(), this.rig)).toLocaleString()} yd` : 'Not seen';
+        const rangeRig = t.detected ? formatYd(dist(t.pos(), this.rig)) : 'Not seen';
+        const assignedBoat = this.blue.find(b => Array.isArray(t.assignedBoats) && t.assignedBoats.includes(b.id));
+        const interceptorRange = assignedBoat ? formatYd(dist(t.pos(), assignedBoat.pos())) : '-';
         tr.innerHTML = `
           <td>${t.id}</td>
-          <td><span class="status-pill"><span class="status-dot" style="background:${statusColor(t.status)}"></span>${t.detected ? t.status : 'not detected'}</span></td>
-          <td>${range}</td>
+          <td>${titleCase(t.targetClass || this.activeScenario.targetClass)}</td>
+          <td><span class="status-pill"><span class="status-dot" style="background:${statusColor(t.status)}"></span>${this.getThreatPhaseLabel(t)}</span></td>
           <td>${t.assignedTo || '-'}</td>
+          <td>${rangeRig}</td>
+          <td>${interceptorRange}</td>
         `;
         UI.table.appendChild(tr);
       }
     }
 
     updateSeedPanel() {
-      const lines = this.threats.map(t => `${t.id}: spawn 15000 yd at ${formatTime(t.activationTime)}, radio ${t.responds ? 'responds (30% path)' : 'no response (70% path)'}`);
+      const lines = this.threats.map(t => {
+        const activationText = Number.isFinite(t.activationTime) ? formatTime(t.activationTime) : 'branch trigger';
+        const branchText = t.secondBranchThreat ? 'second-suspicious branch contact' : 'primary contact';
+        return `${t.id}: ${branchText}, spawn ${formatYd(t.spawnRadiusYd || t.deferredSpawnRadiusYd || CONFIG.enemySpawnRadiusYd)} at ${activationText}, radio ${t.responds ? 'responds (30% path)' : 'no response (70% path)'}`;
+      });
       const neutral = this.neutrals[0];
-      const neutralLine = neutral ? `<br>CV-01 neutral path clearance: ${Math.round(neutral.pathClearanceYd).toLocaleString()} yd from rig (outside ${CONFIG.radarRangeYd.toLocaleString()} yd ring)` : '';
-      UI.scenarioSeed.innerHTML = `<strong>Load decisions</strong><br>${this.attackMode === 'coordinated' ? '50% branch: coordinated attack' : '50% branch: separated attack'}<br>${lines.join('<br>')}<br>MAG hit probability in code: 70%${neutralLine}`;
+      const neutralLine = neutral ? `<br>CV-01 neutral path clearance: ${formatYd(neutral.pathClearanceYd)} from rig (outside ${CONFIG.outerMapRingYd.toLocaleString()} yd outer reference ring)` : '';
+      UI.scenarioSeed.innerHTML = `<strong>Scenario</strong><br>Time of day: ${titleCase(this.activeScenario.timeOfDay)}<br>Target class: ${titleCase(this.activeScenario.targetClass)}<br>Optical ranges: ${formatOpticalRanges(this.activeScenario.opticalRanges)}<br>Dynamic patrol radius: ${formatYd(this.activeScenario.dynamicPatrolRadiusYd)}<br>Second suspicious branch rolled: ${this.secondSuspiciousDuringFirst ? 'Yes (40% branch active)' : 'No'}<br>${lines.join('<br>')}<br>MAG hit probability in code: 70%${neutralLine}`;
     }
 
     logTime(message) { this.log(formatTime(this.time), message); }
@@ -1098,6 +1348,8 @@
       this.drawMapBoundary();
       this.drawRangeElements(rect);
       this.drawNeutralPaths();
+      this.drawVectors();
+      this.drawFireSafetySector();
       this.drawRig(rect);
       this.drawThreats(rect);
       this.drawNeutralTraffic();
@@ -1164,17 +1416,20 @@
     }
 
     drawRangeElements() {
-      const center = this.worldToScreen(this.rig);
-      this.drawCircle(CONFIG.radarRangeYd, 'rgba(90, 188, 222, 0.28)', '20000 yd', 45 * DEG);
+      const ranges = this.activeScenario.opticalRanges;
+      this.drawCircle(ranges.detect, 'rgba(90, 188, 222, 0.32)', `Detect ${ranges.detect} yd`, 34 * DEG);
+      this.drawCircle(ranges.recognize, 'rgba(126, 227, 255, 0.28)', `Recognize ${ranges.recognize} yd`, -18 * DEG);
+      this.drawCircle(ranges.identify, 'rgba(255, 227, 129, 0.28)', `Identify ${ranges.identify} yd`, -120 * DEG);
       this.drawCircle(CONFIG.protectedPolyYd, 'rgba(255, 156, 61, 0.48)', '5000 yd', 140 * DEG);
-      this.drawCircle(CONFIG.patrolRingYd, 'rgba(232, 244, 255, 0.75)', '3000 yd', -98 * DEG, 2);
-      this.drawCircle(CONFIG.staticRingYd, 'rgba(130, 245, 195, 0.9)', '500 yd', 58 * DEG, 2);
-      // Protected polygon outline removed to reduce map clutter; the 5000 yd radius label remains.
+      this.drawCircle(this.activeScenario.dynamicPatrolRadiusYd, 'rgba(232, 244, 255, 0.75)', `Dynamic patrol ${Math.round(this.activeScenario.dynamicPatrolRadiusYd)} yd`, -98 * DEG, 2);
+      this.drawCircle(this.activeScenario.staticPatrolRadiusYd, 'rgba(130, 245, 195, 0.9)', `Static patrol ${Math.round(this.activeScenario.staticPatrolRadiusYd)} yd`, 58 * DEG, 2);
+      this.drawCircle(CONFIG.rigSafetyRingYd, 'rgba(255, 89, 103, 0.48)', 'Rig safety 500 yd', 118 * DEG, 1.5);
     }
 
     drawCircle(radiusYd, stroke, label, labelAngle, lineWidth = 1) {
       const c = this.worldToScreen(this.rig);
       const s = c.scale;
+      const labelStroke = stroke.replace(/,\s*[\d.]+\)$/, ', 0.95)');
       ctx.save();
       ctx.strokeStyle = stroke;
       ctx.lineWidth = lineWidth;
@@ -1182,7 +1437,7 @@
       ctx.arc(c.x, c.y, radiusYd * s, 0, TWO_PI);
       ctx.stroke();
       const lp = { x: c.x + Math.cos(labelAngle) * radiusYd * s, y: c.y + Math.sin(labelAngle) * radiusYd * s };
-      ctx.fillStyle = stroke.replace('0.28', '0.95').replace('0.48', '0.95').replace('0.75', '0.95').replace('0.9', '0.95');
+      ctx.fillStyle = labelStroke;
       ctx.font = '700 12px Inter, system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(label, lp.x, lp.y - 8);
@@ -1332,6 +1587,34 @@
       ctx.restore();
     }
 
+    drawFireSafetySector() {
+      if (!this.currentFireSector) return;
+      const sector = this.currentFireSector;
+      const origin = this.worldToScreen(sector.origin);
+      const radius = sector.rangeYd * origin.scale;
+      ctx.save();
+      ctx.fillStyle = sector.blockers.length ? 'rgba(255, 89, 103, 0.14)' : 'rgba(130, 245, 195, 0.1)';
+      ctx.strokeStyle = sector.blockers.length ? 'rgba(255, 89, 103, 0.6)' : 'rgba(130, 245, 195, 0.48)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(origin.x, origin.y);
+      ctx.arc(origin.x, origin.y, radius, sector.heading - sector.halfAngle, sector.heading + sector.halfAngle);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      for (const blocker of sector.blockers) {
+        const p = this.worldToScreen(blocker.point);
+        ctx.fillStyle = 'rgba(255, 89, 103, 0.9)';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 5, 0, TWO_PI);
+        ctx.fill();
+        ctx.font = '700 11px Inter, system-ui, sans-serif';
+        ctx.fillText(blocker.id, p.x, p.y - 9);
+      }
+      ctx.restore();
+    }
+
     drawScale(rect) {
       const totalMiles = 10;
       const segmentMiles = 2.5;
@@ -1402,11 +1685,16 @@
       mctx.fillStyle = 'rgba(5, 19, 31, 0.4)';
       mctx.fillRect(0, 0, rect.width, rect.height);
       const center = { x: rect.width / 2, y: rect.height / 2 };
-      const scale = Math.min(rect.width, rect.height) / (CONFIG.radarRangeYd * 2.2);
+      const scale = Math.min(rect.width, rect.height) / (this.getMiniMapRangeYd() * 2.2);
+      const ranges = this.activeScenario.opticalRanges;
       mctx.strokeStyle = 'rgba(126, 227, 255, 0.35)';
-      mctx.beginPath(); mctx.arc(center.x, center.y, CONFIG.radarRangeYd * scale, 0, TWO_PI); mctx.stroke();
+      mctx.beginPath(); mctx.arc(center.x, center.y, ranges.detect * scale, 0, TWO_PI); mctx.stroke();
       mctx.strokeStyle = 'rgba(255, 156, 61, 0.45)';
       mctx.beginPath(); mctx.arc(center.x, center.y, CONFIG.protectedPolyYd * scale, 0, TWO_PI); mctx.stroke();
+      mctx.strokeStyle = 'rgba(232, 244, 255, 0.55)';
+      mctx.beginPath(); mctx.arc(center.x, center.y, this.activeScenario.dynamicPatrolRadiusYd * scale, 0, TWO_PI); mctx.stroke();
+      mctx.strokeStyle = 'rgba(130, 245, 195, 0.68)';
+      mctx.beginPath(); mctx.arc(center.x, center.y, this.activeScenario.staticPatrolRadiusYd * scale, 0, TWO_PI); mctx.stroke();
       mctx.fillStyle = COLORS.white;
       mctx.beginPath(); mctx.arc(center.x, center.y, 4, 0, TWO_PI); mctx.fill();
       for (const b of this.blue) this.drawMiniBoat(b, center, scale, b.disabled ? COLORS.gray : COLORS.blue);
@@ -1420,6 +1708,24 @@
       mctx.fillText('N', northX, northY);
       mctx.beginPath();
       mctx.moveTo(northX, northY + 8); mctx.lineTo(northX - 5, northY + 20); mctx.lineTo(northX + 5, northY + 20); mctx.closePath(); mctx.fill();
+    }
+
+    getMiniMapRangeYd() {
+      const assetRanges = [
+        CONFIG.outerMapRingYd,
+        CONFIG.protectedPolyYd,
+        CONFIG.rigSafetyRingYd,
+        this.activeScenario.dynamicPatrolRadiusYd,
+        this.activeScenario.staticPatrolRadiusYd,
+        this.activeScenario.opticalRanges.detect,
+        this.activeScenario.opticalRanges.recognize,
+        this.activeScenario.opticalRanges.identify
+      ];
+      for (const boat of [...this.blue, ...this.neutrals, ...this.threats]) {
+        if (!boat || !boat.visible) continue;
+        assetRanges.push(dist(boat.pos(), this.rig) + 600);
+      }
+      return Math.max(...assetRanges);
     }
 
     drawMiniBoat(boat, center, scale, color) {

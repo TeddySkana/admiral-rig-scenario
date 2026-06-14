@@ -212,6 +212,55 @@ h1 {
   cursor: pointer;
 }
 .speed-btn.active { color: var(--green); border-color: rgba(0, 220, 255, 0.7); background: rgba(0, 160, 190, 0.22); }
+.scenario-settings {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.setting-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(70, 124, 156, 0.22);
+  background: rgba(2, 12, 20, 0.42);
+}
+.setting-field span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 800;
+}
+.setting-control {
+  width: 100%;
+  min-height: 38px;
+  border-radius: 10px;
+  border: 1px solid rgba(91, 146, 177, 0.35);
+  background: rgba(4, 18, 29, 0.9);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+}
+.setting-control:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.setting-readout {
+  color: var(--green);
+  font-size: 0.96rem;
+  line-height: 1.3;
+}
+.setting-field-wide { grid-column: span 2; }
+.setting-hint {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  padding-inline: 2px;
+}
 
 .sim-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; }
 .map-wrap { position: relative; min-height: 580px; padding: 0; overflow: hidden; border-radius: 14px; }
@@ -345,6 +394,8 @@ h1 {
   .approval-actions { justify-content: flex-start; }
   .cards-grid, .landing-grid, .sim-layout, .lower-panels { grid-template-columns: 1fr; }
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .scenario-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .setting-field-wide { grid-column: span 2; }
   .launch-btn { min-width: unset; font-size: 1.1rem; }
   .landing-actions { align-items: stretch; flex-direction: column-reverse; }
 }
@@ -356,6 +407,8 @@ h1 {
   .logo-card img { width: 54px; height: 54px; }
   .stats-grid, .mission-stats { grid-template-columns: 1fr; }
   .status-grid { grid-template-columns: 1fr; }
+  .scenario-settings { grid-template-columns: 1fr; }
+  .setting-field-wide { grid-column: span 1; }
   .orientation-overlay { width: 210px; right: 10px; top: 10px; }
   .fps-badge { left: 10px; bottom: 10px; }
 }
