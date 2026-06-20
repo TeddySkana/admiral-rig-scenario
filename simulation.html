@@ -64,7 +64,7 @@
             <div class="approval-copy">
               <p class="eyebrow">Headquarters authorization</p>
               <h2 id="approvalTitle">Waiting for violent interception approval</h2>
-              <p id="approvalText">HQ is reviewing a violent-interception request at the 1000 yd decision point.</p>
+              <p id="approvalText">Operator approval is being requested at the 1000 yd decision point.</p>
             </div>
             <div class="approval-actions">
               <button id="confirmApprovalBtn" class="btn btn-primary" disabled>Confirm Interception</button>
@@ -77,10 +77,10 @@
       <aside class="side-panel panel-glass">
         <div class="panel-title">Intelligence's mission state</div>
         <div class="logic-step active" id="logicDetect">1. Optical detection by rig sensors</div>
-        <div class="logic-step" id="logicChallenge">2. Radio challenge window and 30%/70% response decision</div>
-        <div class="logic-step" id="logicIntercept">3. Failed response starts 40 kt interception</div>
-        <div class="logic-step" id="logicApproval">4. 5000-2000 yd zigzag and warning flares</div>
-        <div class="logic-step" id="logicWeapon">5. Approval, MAG fire, 60° safety sector</div>
+        <div class="logic-step" id="logicChallenge">2. Radio calls; 30% response / 70% no-response</div>
+        <div class="logic-step" id="logicIntercept">3. No response inside 5000 yd starts 20 kt zigzag</div>
+        <div class="logic-step" id="logicApproval">4. Bullshark-target range: >2000 yd zigzag, <=2000 yd warning flares</div>
+        <div class="logic-step" id="logicWeapon">5. Operator approval at 1000 yd, MAG fire, 60° safety sector</div>
         <div class="logic-step" id="logicRecover">6. Return to dynamic/static patrol</div>
         <div class="scenario-seed" id="scenarioSeed"></div>
         <div id="videoFeed" class="video-feed hidden">

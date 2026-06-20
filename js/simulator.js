@@ -85,13 +85,12 @@
     reserveLaunchDelaySec: 5 * 60,
     maxSpeedKt: 50,
     cruiseSpeedKt: 22,
-    interceptSpeedKt: 40,
+    interceptSpeedKt: 20,
     zigzagSpeedKt: 20,
     warningSpeedKt: 30,
+    radioChallengeDurationSec: 30,
     enemySlowKt: 5,
     enemyAttackKt: 45,
-    hostileZigzagChance: 0.80,
-    hostileZigzagSpeedKt: 20,
     neutralTrafficSpeedKt: 12,
     enemySpawnRadiusYd: 15000,
     yardsVisibleX: 15 * YD_PER_NAUTICAL_MILE,
@@ -139,7 +138,7 @@
   }
   function statusColor(status) {
     if (status === 'unknown' || status === 'compliant') return COLORS.green;
-    if (status === 'suspicious' || status === 'intercepting') return COLORS.orange;
+    if (status === 'no-response' || status === 'approval-held' || status === 'suspicious' || status === 'intercepting') return COLORS.orange;
     if (status === 'hostile' || status === 'engaging') return COLORS.red;
     if (status === 'neutralized' || status === 'left-area') return COLORS.gray;
     return COLORS.blue;
@@ -197,7 +196,6 @@
       this.patrolAngle = opts.patrolAngle || 0;
       this.zigzagDir = 1;
       this.zigzagClock = 0;
-      this.evasiveZigzag = false;
       this.threeDots = this.computeDots();
     }
 
@@ -296,7 +294,7 @@
         staticPatrolRadiusYd,
         opticalRanges,
         dynamicPatrolRadiusYd,
-        challengeEndRangeYd: Math.max(opticalRanges.identify, opticalRanges.detect - 2000)
+        engagementGateYd: CONFIG.protectedPolyYd
       };
     }
 
@@ -312,7 +310,7 @@
         staticPatrolRadiusYd,
         opticalRanges,
         dynamicPatrolRadiusYd,
-        challengeEndRangeYd: Math.max(opticalRanges.identify, opticalRanges.detect - 2000)
+        engagementGateYd: CONFIG.protectedPolyYd
       };
     }
 
@@ -334,7 +332,7 @@
         if (!threat.detected || !threat.radioResolved) {
           threat.timeOfDay = this.activeScenario.timeOfDay;
           threat.opticalRanges = { ...this.activeScenario.opticalRanges };
-          threat.challengeEndRangeYd = this.activeScenario.challengeEndRangeYd;
+          threat.engagementGateYd = this.activeScenario.engagementGateYd;
         }
       }
 
@@ -393,8 +391,6 @@
       threat.activationTime = activationTime;
       threat.spawnRadiusYd = spawnRadiusYd;
       threat.enteredMapLogged = false;
-      threat.evasiveSeed = Math.random() < CONFIG.hostileZigzagChance;
-      threat.evasiveZigzagAngleDeg = 30;
       threat.complianceTurn = choice([-1, 1]);
       threat.assignedBoats = [];
       threat.bs402SupportLogged = false;
@@ -402,9 +398,12 @@
       threat.targetClass = this.activeScenario.targetClass;
       threat.timeOfDay = this.activeScenario.timeOfDay;
       threat.opticalRanges = { ...this.activeScenario.opticalRanges };
-      threat.challengeEndRangeYd = this.activeScenario.challengeEndRangeYd;
+      threat.engagementGateYd = this.activeScenario.engagementGateYd;
       threat.radioChallengeStarted = false;
+      threat.radioChallengeStartedAt = null;
       threat.radioResolved = false;
+      threat.radioNoResponse = false;
+      threat.gateEntryLogged = false;
       threat.phase = 'not detected';
       threat.radioResultLabel = responds ? '30% compliant branch' : '70% no-response branch';
       threat.branchTag = opts.branchTag || 'primary';
@@ -548,7 +547,7 @@
     bindEvents() {
       UI.play.addEventListener('click', () => {
         if (this.approvalPauseActive) {
-          this.logTime('Simulation is paused until the HQ approval popup receives a response.');
+          this.logTime('Simulation is paused until the operator approval popup receives a response.');
           return;
         }
         this.running = true;
@@ -713,9 +712,10 @@
           t.status = 'unknown';
           t.phase = 'optical detected';
           t.radioChallengeStarted = true;
+          t.radioChallengeStartedAt = this.time;
           this.setLogic('detect');
           this.setSpeedMultiplier(10);
-          this.logTime(`${t.id} optical detection at ${Math.round(rangeRig)} yd. Rig sensors pass the contact to the patrol boat and the radio challenge window opens down to ${Math.round(t.challengeEndRangeYd)} yd.`);
+          this.logTime(`${t.id} optical detection at ${Math.round(rangeRig)} yd. Rig optical sensors pass the contact to the patrol boat. Radio calls start while the target range is checked against the ${CONFIG.protectedPolyYd.toLocaleString()} yd gate.`);
         }
 
         if (!t.detected) {
@@ -731,9 +731,28 @@
         }
 
         if (!t.radioResolved) {
-          t.phase = 'radio challenge';
+          t.phase = rangeRig > CONFIG.protectedPolyYd ? 'radio calls outside 5000 yd' : 'radio calls inside 5000 yd';
           t.move(dt, angleTo(t.pos(), this.rig), CONFIG.enemySlowKt);
-          if (rangeRig <= t.challengeEndRangeYd) this.challengeThreat(t);
+          const challengeElapsed = t.radioChallengeStartedAt !== null && this.time - t.radioChallengeStartedAt >= CONFIG.radioChallengeDurationSec;
+          if (challengeElapsed || rangeRig <= CONFIG.protectedPolyYd) this.challengeThreat(t);
+          continue;
+        }
+
+        if (t.status === 'no-response') {
+          t.phase = rangeRig > CONFIG.protectedPolyYd ? 'no response - monitoring to 5000 yd' : 'inside 5000 yd - intercept';
+          t.move(dt, angleTo(t.pos(), this.rig), CONFIG.enemySlowKt);
+          if (rangeRig <= CONFIG.protectedPolyYd) {
+            t.status = 'suspicious';
+            t.phase = 'inside 5000 yd - intercept';
+            t.speedKt = CONFIG.enemyAttackKt;
+            this.setLogic('intercept', 'warning');
+            if (!t.gateEntryLogged) {
+              t.gateEntryLogged = true;
+              this.logTime(`${t.id} reached the ${CONFIG.protectedPolyYd.toLocaleString()} yd target-to-rig gate with no radio response. Bullshark interception starts in the 20 kt zigzag profile.`);
+              this.showMapNotice(`${t.id} is inside 5000 yd with no response. 20 kt zigzag interception is starting.`, 5000);
+            }
+            this.assignInterceptor(t);
+          }
           continue;
         }
 
@@ -743,13 +762,12 @@
           continue;
         }
 
-        if (t.status === 'suspicious' || t.status === 'hostile' || t.status === 'engaging') {
+        if (t.status === 'suspicious' || t.status === 'hostile' || t.status === 'engaging' || t.status === 'approval-held') {
           this.moveHostileThreat(t, dt);
-          if (dist(t.pos(), this.rig) <= CONFIG.protectedPolyYd && t.status !== 'hostile' && t.status !== 'engaging') {
-            t.status = 'hostile';
-            t.phase = 'hostile';
+          if (dist(t.pos(), this.rig) <= CONFIG.protectedPolyYd && !t.penetrationLogged) {
+            t.penetrationLogged = true;
             this.setLogic('intercept', 'danger');
-            this.logTime(`${t.id} penetrated the 5000 yd protected area and is now hostile.`);
+            this.logTime(`${t.id} is inside the ${CONFIG.protectedPolyYd.toLocaleString()} yd target-to-rig gate. Interception continues; mission failure is only inside the 500 yd rig safety ring.`);
           }
         }
 
@@ -783,19 +801,28 @@
     challengeThreat(t) {
       this.setLogic('challenge');
       t.radioResolved = true;
+      const rangeFromRig = dist(t.pos(), this.rig);
       if (t.responds) {
         t.status = 'compliant';
         t.phase = 'compliant';
         t.speedKt = 10;
         this.prepareCompliantEscape(t);
-        this.logTime(`${t.id} reached the radio challenge decision line at ${Math.round(dist(t.pos(), this.rig))} yd and responded. It is no longer suspicious, and blue forces continue patrol while it exits safely.`);
+        this.logTime(`${t.id} answered the radio calls at ${Math.round(rangeFromRig)} yd from the rig. It is treated as compliant, blue forces continue patrol, and the contact exits safely.`);
+      } else if (rangeFromRig > CONFIG.protectedPolyYd) {
+        t.status = 'no-response';
+        t.radioNoResponse = true;
+        t.phase = 'no response - monitoring to 5000 yd';
+        t.speedKt = CONFIG.enemySlowKt;
+        this.logTime(`${t.id} did not answer the radio calls at ${Math.round(rangeFromRig)} yd. The contact is monitored until it reaches the ${CONFIG.protectedPolyYd.toLocaleString()} yd target-to-rig gate.`);
       } else {
         t.status = 'suspicious';
-        t.phase = 'suspicious';
+        t.radioNoResponse = true;
+        t.phase = 'inside 5000 yd - intercept';
         t.speedKt = CONFIG.enemyAttackKt;
+        t.gateEntryLogged = true;
         this.setLogic('intercept', 'warning');
-        this.logTime(`${t.id} reached the radio challenge decision line at ${Math.round(dist(t.pos(), this.rig))} yd and did not respond. Status changes to suspicious and the target accelerates to 45 kt toward the rig.`);
-        this.showMapNotice(`${t.id} failed the radio challenge. 40 kt interception is starting.`, 5000);
+        this.logTime(`${t.id} did not answer inside the ${CONFIG.protectedPolyYd.toLocaleString()} yd target-to-rig gate. Bullshark interception starts with 20 kt zigzag and continued radio calls.`);
+        this.showMapNotice(`${t.id} failed the radio calls inside 5000 yd. 20 kt zigzag interception is starting.`, 5000);
         this.assignInterceptor(t);
       }
       this.updateSeedPanel();
@@ -837,15 +864,8 @@
 
     moveHostileThreat(t, dt) {
       const p = t.pos();
-      let desired = angleTo(p, this.rig);
-      let speed = CONFIG.enemyAttackKt;
-      if (t.evasiveZigzag) {
-        t.zigzagClock += dt;
-        const wave = Math.sign(Math.sin(t.zigzagClock / 10)) || 1;
-        const zigzagAngle = clamp(t.evasiveZigzagAngleDeg || 30, 30, 30);
-        desired += wave * zigzagAngle * DEG;
-        speed = CONFIG.hostileZigzagSpeedKt;
-      }
+      const desired = angleTo(p, this.rig);
+      const speed = t.speedKt || CONFIG.enemyAttackKt;
       t.move(dt, desired, speed);
     }
 
@@ -898,7 +918,7 @@
         }
         if (!t.lightsFlaresLogged) {
           t.lightsFlaresLogged = true;
-          this.logTime(`${chosenBoat.id} assigned to intercept ${t.id}. The boat points its bow at the target, accelerates to 40 kt, and uses lights and flares while closing.`);
+          this.logTime(`${chosenBoat.id} assigned to intercept ${t.id}. The boat keeps radio calls active and uses the 20 kt zigzag profile until the 2000 yd warning-flare gate.`);
         }
       } else {
         this.requestReserve();
@@ -956,6 +976,25 @@
       };
     }
 
+    computeTargetRearPoint(target, offsetYd = 45) {
+      return {
+        x: target.x - Math.cos(target.heading) * offsetYd,
+        y: target.y - Math.sin(target.heading) * offsetYd
+      };
+    }
+
+    computeZigzagInterceptHeading(interceptor, target, dt) {
+      const direct = angleTo(interceptor.pos(), target.pos());
+      interceptor.zigzagClock += dt;
+      const wave = Math.sign(Math.sin(interceptor.zigzagClock / 9)) || 1;
+      const angleDeg = this.computeInterceptZigzagAngleDeg(interceptor, target, dist(interceptor.pos(), target.pos()));
+      const zigzagDesired = direct + wave * angleDeg * DEG;
+      if (this.projectedRangeAfterMove(interceptor, target, dt, zigzagDesired, CONFIG.zigzagSpeedKt) < 450) {
+        return direct;
+      }
+      return zigzagDesired;
+    }
+
     updateInterceptors(dt) {
       this.currentFireSector = null;
       for (const b of this.blue) {
@@ -968,39 +1007,55 @@
 
         const range = dist(b.pos(), target.pos());
         let desired = angleTo(b.pos(), target.pos());
-        let speed = CONFIG.interceptSpeedKt;
+        let speed = CONFIG.zigzagSpeedKt;
 
         if (b.magMissed && range <= 200) {
-          b.status = 'ram';
+          b.status = 'ramming';
+          target.phase = 'rear collision attempt';
+          const rearPoint = this.computeTargetRearPoint(target, 45);
+          desired = angleTo(b.pos(), rearPoint);
           speed = CONFIG.maxSpeedKt;
-          target.phase = 'ramming fallback';
-          this.logTime(`${b.id} is within 200 yd of ${target.id}. MAG failed, so the boat switches to max-speed chase and ramming as a lower-quality last-resort outcome.`);
-          target.status = 'neutralized';
-          target.disabled = true;
-          target.phase = 'neutralized';
-          b.disabled = true;
-          b.status = 'disabled';
-          this.logTime(`${target.id} neutralized by physical collision. ${b.id} is lost in the ramming fallback.`);
-          if (!this.hasActiveSuspiciousThreat()) UI.video.classList.add('hidden');
-          this.releaseInterceptor(b, 'lost');
-          continue;
-        }
-
-        if (range <= 1000) {
-          speed = CONFIG.warningSpeedKt;
-          if (target.approval !== 'approved') {
+          if (!target.rammingLogged) {
+            target.rammingLogged = true;
+            this.logTime(`${b.id} is within 200 yd of ${target.id}. MAG failed, so it switches to max-speed pursuit and attempts rear-side collision.`);
+          }
+          if (dist(b.pos(), rearPoint) <= 35 || range <= 35) {
+            target.status = 'neutralized';
+            target.disabled = true;
+            target.phase = 'neutralized';
+            this.logTime(`${target.id} neutralized by rear-side collision attempt. ${b.id} remains under control and returns to patrol.`);
+            if (!this.hasActiveSuspiciousThreat()) UI.video.classList.add('hidden');
+            this.releaseInterceptor(b, 'return');
+            continue;
+          }
+        } else if (range <= 1000) {
+          speed = b.magMissed ? CONFIG.warningSpeedKt : CONFIG.warningSpeedKt;
+          if (target.approval === 'held') {
+            b.status = 'await-approval';
+            target.status = 'approval-held';
+            target.phase = 'approval held';
+            desired = angleTo(b.pos(), target.pos());
+            speed = 0;
+          } else if (target.approval !== 'approved') {
             b.status = 'await-approval';
             target.phase = 'awaiting approval';
             this.requestApproval(target, b);
+          } else if (b.magMissed) {
+            b.status = 'closing-for-ram';
+            target.phase = 'MAG missed - closing to 200 yd';
+            desired = angleTo(b.pos(), target.pos());
+            speed = CONFIG.warningSpeedKt;
           } else {
             b.status = 'engage-mag';
+            target.status = 'engaging';
             target.phase = 'engaging';
+            desired = angleTo(b.pos(), target.pos());
             const sector = this.isFireSectorClear(b, target);
             if (!sector.clear) {
               const blockerName = sector.blocker?.id || 'protected object';
               if (target.lastSafetyBlocker !== blockerName) {
                 target.lastSafetyBlocker = blockerName;
-                this.logTime(`${b.id} holds MAG fire. ${blockerName} is inside the MAG 60° / 2100 yd safety sector, so the boat keeps maneuvering for a safe flank.`);
+                this.logTime(`${b.id} holds MAG fire. ${blockerName} intersects the MAG 60° / 2100 yd safety sector, so the boat keeps maneuvering for a safe flank.`);
               }
               const flank = this.computeSafeFlankPoint(b, target);
               desired = angleTo(b.pos(), flank);
@@ -1012,7 +1067,7 @@
           }
         } else if (range <= 2000) {
           b.status = 'warning-fire';
-          target.phase = 'warning';
+          target.phase = 'warning flares';
           this.setLogic('approval', 'warning', false);
           desired = angleTo(b.pos(), target.pos());
           b.interceptFlareSide *= -1;
@@ -1021,28 +1076,16 @@
             target.warningLogged = true;
             this.logTime(`${b.id} reached 2000 yd from ${target.id}. Zigzag stops, the bow stays on target, warning flares alternate 30° left and right, and speed settles at 30 kt.`);
           }
-        } else if (range <= 5000) {
+        } else {
           b.status = 'zigzag-warning';
           target.phase = 'zigzag intercept';
           this.setLogic('approval', 'warning', false);
-          b.zigzagClock += dt;
-          const wave = Math.sign(Math.sin(b.zigzagClock / 9)) || 1;
-          const angleDeg = this.computeInterceptZigzagAngleDeg(b, target, range);
-          const zigzagDesired = desired + wave * angleDeg * DEG;
-          if (this.projectedRangeAfterMove(b, target, dt, zigzagDesired, CONFIG.zigzagSpeedKt) < 450) {
-            desired = angleTo(b.pos(), target.pos());
-          } else {
-            desired = zigzagDesired;
-          }
+          desired = this.computeZigzagInterceptHeading(b, target, dt);
           speed = CONFIG.zigzagSpeedKt;
           if (!target.zigzagLogged) {
             target.zigzagLogged = true;
-            this.logTime(`${b.id} reached 5000 yd from ${target.id}. It begins a 20 kt intercept zigzag with warning flares while preserving firing-entry geometry.`);
+            this.logTime(`${b.id} starts the PDF zigzag approach toward ${target.id}: 20 kt, 30-60° zigzag based on target speed, radio calls continuing, and geometry preserved for MAG entry.`);
           }
-        } else {
-          b.status = 'intercept-approach';
-          target.phase = 'suspicious';
-          speed = CONFIG.interceptSpeedKt;
         }
         b.move(dt, desired, speed);
       }
@@ -1075,14 +1118,14 @@
       this.pendingApprovalThreatId = target.id;
       this.approvalPauseActive = true;
       this.setLogic('weapon', 'danger');
-      this.logTime(`${interceptor.id} reached 1000 yd from ${target.id}. Operator/HQ violent-interception approval requested. Simulation paused for HQ response.`);
+      this.logTime(`${interceptor.id} reached 1000 yd from ${target.id}. Operator approval for violent interception is requested. Simulation paused for the response.`);
       this.showApproval(target);
       this.running = false;
       this.approvalTimer = setTimeout(() => {
         if (target.approval === 'pending') {
           UI.approvalCard.classList.remove('pending');
           UI.approvalCard.classList.add('approved');
-          UI.approvalTitle.textContent = 'HQ approved violent interception';
+          UI.approvalTitle.textContent = 'Operator approval ready';
           UI.approvalText.textContent = 'The approval screen is green. Confirm violent interception to continue with MAG fire under the 60° / 2100 yd safety-sector check.';
           UI.confirmApproval.disabled = false;
           this.showVideoFor(target);
@@ -1097,8 +1140,8 @@
       UI.video.classList.add('hidden');
       UI.approvalCard.classList.add('pending');
       UI.approvalCard.classList.remove('approved');
-      UI.approvalTitle.textContent = `Waiting for violent interception approval for ${target.id}`;
-      UI.approvalText.textContent = 'HQ review in progress at the 1000 yd decision point. The simulation is paused; the screen will turn green after five seconds or continue when you cancel the display.';
+      UI.approvalTitle.textContent = `Waiting for operator approval for ${target.id}`;
+      UI.approvalText.textContent = 'Operator review in progress at the 1000 yd decision point. The simulation is paused; the screen turns green after five seconds, but MAG fire starts only if you confirm.';
       UI.confirmApproval.disabled = true;
       UI.videoThreatId.textContent = target.id;
     }
@@ -1137,14 +1180,8 @@
         target.approval = 'approved';
         target.status = 'engaging';
         target.phase = 'engaging';
-        if (target.evasiveSeed) {
-          target.evasiveZigzag = true;
-          this.logTime(`${target.id} begins evasive zigzag at 20 kt with a fixed 30° weave after MAG fire starts.`);
-        } else {
-          this.logTime(`${target.id} keeps charging straight at max attack speed even after MAG fire begins.`);
-        }
         this.setLogic('weapon', 'danger');
-        this.logTime(`HQ approval confirmed for ${target.id}. MAG engagement authorized with 70% hit probability and a 60° / 2100 yd safety-sector check.`);
+        this.logTime(`Operator approval confirmed for ${target.id}. MAG engagement is authorized with 70% hit probability and the 60° / 2100 yd safety-sector check.`);
       }
       this.hideApproval(false);
       this.showVideoFor(target);
@@ -1155,22 +1192,16 @@
     cancelApprovalDisplay() {
       const target = this.threats.find(t => t.id === this.pendingApprovalThreatId);
       if (target && target.approval === 'pending') {
-        target.approval = 'approved';
-        target.status = 'engaging';
-        target.phase = 'engaging';
-        if (target.evasiveSeed) {
-          target.evasiveZigzag = true;
-          this.logTime(`${target.id} begins evasive zigzag at 20 kt with a fixed 30° weave after MAG fire starts.`);
-        } else {
-          this.logTime(`${target.id} keeps charging straight at max attack speed even after MAG fire begins.`);
-        }
-        this.setLogic('weapon', 'danger');
-        this.logTime('Approval display cancelled by the user. HQ approval is treated as received and the simulation continues at x1.');
+        target.approval = 'held';
+        target.status = 'approval-held';
+        target.phase = 'approval held';
+        this.setLogic('weapon', 'warning');
+        this.logTime(`Approval display closed for ${target.id}. Violent interception is not authorized, so MAG fire remains blocked.`);
+        this.showMapNotice(`${target.id}: approval held. MAG fire is not authorized.`, 5000);
       } else {
         this.logTime('Approval display closed.');
       }
-      this.hideApproval(false);
-      this.showVideoFor(target);
+      this.hideApproval(true);
       this.setSpeedMultiplier(1);
       this.running = true;
     }
@@ -1181,11 +1212,11 @@
 
     getProtectedObjects() {
       return [
-        { id: 'Rig', x: this.rig.x, y: this.rig.y },
-        { id: 'Rig north structure', x: this.rig.x, y: this.rig.y - 90 },
-        { id: 'Rig south structure', x: this.rig.x, y: this.rig.y + 90 },
-        { id: 'Rig east structure', x: this.rig.x + 110, y: this.rig.y },
-        { id: 'Rig west structure', x: this.rig.x - 110, y: this.rig.y }
+        { id: 'Rig', x: this.rig.x, y: this.rig.y, radiusYd: 150 },
+        { id: 'Rig north structure', x: this.rig.x, y: this.rig.y - 90, radiusYd: 80 },
+        { id: 'Rig south structure', x: this.rig.x, y: this.rig.y + 90, radiusYd: 80 },
+        { id: 'Rig east structure', x: this.rig.x + 110, y: this.rig.y, radiusYd: 80 },
+        { id: 'Rig west structure', x: this.rig.x - 110, y: this.rig.y, radiusYd: 80 }
       ];
     }
 
@@ -1199,7 +1230,9 @@
         const range = dist(origin, objectPoint);
         if (range > CONFIG.magSafetySectorRangeYd || range < 1) return;
         const bearing = angleTo(origin, objectPoint);
-        if (angleDiff(fireHeading, bearing) <= halfAngle) blockers.push({ id: obj.id, range, category, point: objectPoint });
+        const radiusYd = obj.radiusYd || Math.max(obj.lengthYd || 0, obj.widthYd || 0, 20) / 2;
+        const angularRadius = Math.asin(clamp(radiusYd / range, 0, 1));
+        if (angleDiff(fireHeading, bearing) <= halfAngle + angularRadius) blockers.push({ id: obj.id, range, category, point: objectPoint, radiusYd });
       };
 
       for (const blue of this.blue) {
@@ -1233,6 +1266,7 @@
 
     engageMag(b, target, range) {
       if (range > CONFIG.magRangeYd) return;
+      if (b.magMissed || target.magMissed) return;
       if (!this.safeToFire(b, target)) return;
       if (this.time < b.nextShotAt) return;
       b.nextShotAt = this.time + 5;
@@ -1249,7 +1283,7 @@
       } else {
         b.magMissed = true;
         target.magMissed = true;
-        this.logTime(`${b.id} MAG burst missed ${target.id}. Continue closing for last-resort interception.`);
+        this.logTime(`${b.id} MAG burst missed ${target.id}. Continue closing; at 200 yd the boat switches to max-speed rear collision attempt.`);
       }
     }
 
@@ -1289,7 +1323,7 @@
     }
 
     hasActiveSuspiciousThreat() {
-      return this.threats.some(t => t.detected && !t.disabled && ['suspicious', 'hostile', 'engaging'].includes(t.status));
+      return this.threats.some(t => t.detected && !t.disabled && ['no-response', 'suspicious', 'hostile', 'engaging', 'approval-held'].includes(t.status));
     }
 
     refreshMissionLogicState() {
@@ -1306,16 +1340,12 @@
         return;
       }
       for (const t of this.threats) {
-        if (t.status === 'suspicious' || t.status === 'hostile' || t.status === 'engaging') {
+        if (t.status === 'suspicious' || t.status === 'hostile' || t.status === 'engaging' || t.status === 'approval-held' || t.status === 'no-response') {
           if (dist(t.pos(), this.rig) <= CONFIG.rigSafetyRingYd) {
             this.outcome = `Mission failed: ${t.id} reached the rig safety ring`;
             this.logTime(this.outcome);
             this.running = false;
             return;
-          }
-          if (dist(t.pos(), this.rig) <= CONFIG.protectedPolyYd && !t.penetrationLogged) {
-            t.penetrationLogged = true;
-            this.logTime(`${t.id} entered the 5000 yd protected area. Mission continues; failure is only inside the 500 yd rig safety ring.`);
           }
         }
       }
@@ -1333,7 +1363,7 @@
       this.syncDayNightIndicator(clockState.dayPart);
       const live = this.threats.filter(t => t.detected && !['neutralized', 'left-area', 'compliant'].includes(t.status)).length;
       const tracking = this.threats.filter(t => t.detected && t.status !== 'left-area').length;
-      const hostile = this.threats.filter(t => ['suspicious', 'hostile', 'engaging'].includes(t.status)).length;
+      const hostile = this.threats.filter(t => ['suspicious', 'hostile', 'engaging', 'approval-held'].includes(t.status)).length;
       UI.live.textContent = String(live);
       UI.tracking.textContent = String(tracking);
       UI.hostile.textContent = String(hostile);
@@ -1373,7 +1403,7 @@
       const lines = this.threats.map(t => {
         const activationText = Number.isFinite(t.activationTime) ? formatTime(t.activationTime) : 'branch trigger';
         const branchText = t.secondBranchThreat ? 'second-suspicious branch contact' : 'primary contact';
-        return `${t.id}: ${branchText}, spawn ${formatYd(t.spawnRadiusYd || t.deferredSpawnRadiusYd || CONFIG.enemySpawnRadiusYd)} at ${activationText}, radio ${t.responds ? 'responds (30% path)' : 'no response (70% path)'}`;
+        return `${t.id}: ${branchText}, spawn ${formatYd(t.spawnRadiusYd || t.deferredSpawnRadiusYd || CONFIG.enemySpawnRadiusYd)} at ${activationText}, radio ${t.responds ? 'responds (30% path)' : 'no response (70% path, monitor to 5000 yd)'}`;
       });
       const neutral = this.neutrals[0];
       const neutralLine = neutral ? `<br>CV-01 neutral path clearance: ${formatYd(neutral.pathClearanceYd)} from rig (outside ${CONFIG.outerMapRingYd.toLocaleString()} yd outer reference ring)` : '';
