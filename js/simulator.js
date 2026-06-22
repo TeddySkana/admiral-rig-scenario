@@ -896,6 +896,8 @@
       boat.status = 'intercept-approach';
       boat.interceptPhase = 'closing-40kt';
       boat.zigzagClock = 0;
+      boat.lastZigzagWave = 0;
+      boat.zigzagPlanMode = null;
       boat.interceptFlareSide = 1;
       boat.flankSide = choice([-1, 1]);
       if (!Array.isArray(threat.assignedBoats)) threat.assignedBoats = [];
@@ -995,6 +997,39 @@
       return zigzagDesired;
     }
 
+    computeZigzagInterceptPlan(interceptor, target, dt) {
+      const range = dist(interceptor.pos(), target.pos());
+      const directHeading = angleTo(interceptor.pos(), target.pos());
+      const nextClock = interceptor.zigzagClock + dt;
+      const wave = Math.sign(Math.sin(nextClock / 9)) || 1;
+      const angleDeg = this.computeInterceptZigzagAngleDeg(interceptor, target, range);
+      const zigzagHeading = directHeading + wave * angleDeg * DEG;
+      const directProjectedRange = this.projectedRangeAfterMove(interceptor, target, dt, directHeading, CONFIG.zigzagSpeedKt);
+      const zigzagProjectedRange = this.projectedRangeAfterMove(interceptor, target, dt, zigzagHeading, CONFIG.zigzagSpeedKt);
+      const targetAspectError = angleDiff(target.heading, directHeading);
+      const waveChanged = interceptor.lastZigzagWave !== 0 && interceptor.lastZigzagWave !== wave;
+
+      const overshootRisk = zigzagProjectedRange < 450;
+      const directClosesMeaningfullyBetter = directProjectedRange + 120 < zigzagProjectedRange;
+      const restoreFiringGeometry = targetAspectError > 115 * DEG && range < 3200;
+      const shouldAbortCurrentLeg = overshootRisk || directClosesMeaningfullyBetter || restoreFiringGeometry;
+
+      return {
+        wave,
+        waveChanged,
+        mode: shouldAbortCurrentLeg ? 'direct-recover' : `zigzag-${wave > 0 ? 'starboard' : 'port'}`,
+        heading: shouldAbortCurrentLeg ? directHeading : zigzagHeading,
+        shouldAbortCurrentLeg,
+        reason: overshootRisk
+          ? 'overshoot-risk'
+          : directClosesMeaningfullyBetter
+            ? 'direct-closure-better'
+            : restoreFiringGeometry
+              ? 'restore-firing-geometry'
+              : 'continue-zigzag'
+      };
+    }
+
     updateInterceptors(dt) {
       this.currentFireSector = null;
       for (const b of this.blue) {
@@ -1080,12 +1115,24 @@
           b.status = 'zigzag-warning';
           target.phase = 'zigzag intercept';
           this.setLogic('approval', 'warning', false);
-          desired = this.computeZigzagInterceptHeading(b, target, dt);
+          const zigzagPlan = this.computeZigzagInterceptPlan(b, target, dt);
+          b.zigzagClock += dt;
+          desired = zigzagPlan.heading;
           speed = CONFIG.zigzagSpeedKt;
           if (!target.zigzagLogged) {
             target.zigzagLogged = true;
             this.logTime(`${b.id} starts the PDF zigzag approach toward ${target.id}: 20 kt, 30-60° zigzag based on target speed, radio calls continuing, and geometry preserved for MAG entry.`);
           }
+          if (zigzagPlan.waveChanged && zigzagPlan.mode !== b.zigzagPlanMode) {
+            const planText = zigzagPlan.mode === 'direct-recover'
+              ? 'cuts the current zigzag leg short and re-centers directly on the target'
+              : `switches to the ${zigzagPlan.wave > 0 ? 'starboard' : 'port'} zigzag leg`;
+            this.logTime(`${b.id} re-evaluates the intercept as the zigzag angle changes and ${planText}. Reason: ${zigzagPlan.reason.replace(/-/g, ' ')}.`);
+          } else if (zigzagPlan.shouldAbortCurrentLeg && b.zigzagPlanMode !== 'direct-recover') {
+            this.logTime(`${b.id} stops the current zigzag leg early and goes direct to improve closure and preserve firing-entry geometry.`);
+          }
+          b.lastZigzagWave = zigzagPlan.wave;
+          b.zigzagPlanMode = zigzagPlan.mode;
         }
         b.move(dt, desired, speed);
       }
