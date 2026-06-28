@@ -90,20 +90,29 @@
             <option value="23">23</option>
           </select>
         </label>
-        <a id="launchMissionBtn" class="btn btn-primary launch-btn" href="./simulation.html?startHour=12"><span class="play-glyph"></span> Launch Offshore Mission</a>
+        <div class="launch-buttons" aria-label="Launch program mode">
+          <a id="launchExpertBtn" class="btn btn-primary launch-btn" href="./simulation.html?startHour=12&amp;mode=expert"><span class="play-glyph"></span> Expert-driven programma</a>
+          <a id="launchAiBtn" class="btn btn-muted launch-btn" href="./simulation.html?startHour=12&amp;mode=ai"><span class="play-glyph"></span> AI-driven programma</a>
+        </div>
       </div>
     </section>
   </main>
   <script>
     (() => {
       const hourSelect = document.getElementById('missionStartHour');
-      const launchBtn = document.getElementById('launchMissionBtn');
-      if (!hourSelect || !launchBtn) return;
+      const expertBtn = document.getElementById('launchExpertBtn');
+      const aiBtn = document.getElementById('launchAiBtn');
+      if (!hourSelect || !expertBtn || !aiBtn) return;
 
-      const updateLaunchHref = () => {
+      const buildHref = (mode) => {
         const hour = Number(hourSelect.value);
         const safeHour = Number.isFinite(hour) ? Math.max(0, Math.min(23, hour)) : 12;
-        launchBtn.href = `./simulation.html?startHour=${safeHour}`;
+        return `./simulation.html?startHour=${safeHour}&mode=${mode}`;
+      };
+
+      const updateLaunchHref = () => {
+        expertBtn.href = buildHref('expert');
+        aiBtn.href = buildHref('ai');
       };
 
       hourSelect.addEventListener('change', updateLaunchHref);

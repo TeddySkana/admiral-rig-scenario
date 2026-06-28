@@ -118,6 +118,14 @@
     </section>
   </main>
 
-  <script src="js/simulator.js"></script>
+  <script>
+    (() => {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get('mode') === 'ai' ? 'ai' : 'expert';
+      const script = document.createElement('script');
+      script.src = mode === 'ai' ? 'js/simulator-ai.js' : 'js/simulator.js';
+      document.body.appendChild(script);
+    })();
+  </script>
 </body>
 </html>

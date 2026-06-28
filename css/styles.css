@@ -164,6 +164,12 @@ h1 {
   align-items: center;
   margin-top: 18px;
 }
+.launch-buttons {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .launch-setting {
   min-width: 170px;
 }
@@ -189,7 +195,7 @@ h1 {
 .btn-primary { border-color: rgba(0, 220, 255, 0.55); background: linear-gradient(180deg, #087994, #075d73); box-shadow: 0 18px 36px rgba(0, 160, 202, 0.18); }
 .btn-muted { background: rgba(5, 20, 32, 0.78); }
 .btn.small { min-height: 38px; padding: 10px 16px; border-radius: 11px; font-size: 0.9rem; }
-.launch-btn { min-width: min(520px, 46vw); font-size: 1.5rem; padding-block: 20px; }
+.launch-btn { min-width: min(360px, 30vw); font-size: 1.28rem; padding-block: 20px; }
 .play-glyph { width: 0; height: 0; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-left: 11px solid currentColor; display: inline-block; }
 
 .sim-page { overflow-x: hidden; }
@@ -450,6 +456,7 @@ h1 {
   .setting-field-wide { grid-column: span 2; }
   .launch-btn { min-width: unset; font-size: 1.1rem; }
   .landing-actions { align-items: stretch; flex-direction: column-reverse; }
+  .launch-buttons { justify-content: stretch; }
 }
 
 @media (max-width: 640px) {
